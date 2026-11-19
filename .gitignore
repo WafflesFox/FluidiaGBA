@@ -1,0 +1,15 @@
+build/
+*.elf
+*.gba
+*.sav
+*.log
+.vscode/
+__pycache__/
+
+# Butano extras not needed to build the game
+/docs/
+/docs_tools/
+/examples/
+/games/
+/tests/
+/issues/
