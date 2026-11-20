@@ -24,9 +24,9 @@ Built with [Butano](https://github.com/GValiente/butano), a modern C++ engine fo
 
 ## Credits
 
-Engine: Butano by Gustavo Valiente.
-Pixel Art: Made by Me
-Music: all found in Pixabay
+- `Engine:` Butano by Gustavo Valiente.
+- `Pixel Art:` Made by Me
+- `Music:` all found in Pixabay
 
 ## Disclaimer stuff
 Im still new to developing actual stuff for actual things, so AI was used on few parts. but I am learning as I progress. I learned that C++ is absolutely hell to look at
