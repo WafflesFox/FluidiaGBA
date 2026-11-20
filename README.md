@@ -1,7 +1,6 @@
 # FluidiaGBA
 
-A pixel-art physics game for the Game Boy Advance, made for fun.
-(Add one or two lines about what the player does and which physics concepts it teaches.)
+A pixel-art physics game for the Game Boy Advance, made for fun. Its an RPG where you have to utilize the knowledge about fluids to fight.
 
 Built with [Butano](https://github.com/GValiente/butano), a modern C++ engine for the GBA.
 
