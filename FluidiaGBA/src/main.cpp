@@ -1,3 +1,4 @@
+#define GAME_VER "0.1.8"
 #include "bn_core.h"
 #include "bn_color.h"
 #include "bn_bg_palettes.h"
@@ -17,7 +18,11 @@
 #include "bn_sound_items.h"
 #include "bn_sound_item.h"
 #include "bn_sound_handle.h"
+
+//characters
 #include "bn_sprite_items_waffle.h"
+#include "bn_sprite_items_snep.h"
+
 #include "bn_sprite_items_black_block.h"   // solid black 64x64, used by the screen transition
 
 // the maps: ground picture, the layer drawn in front of the player, and the collision grids
@@ -249,6 +254,142 @@ namespace
             blocks[i].set_position(bn::fixed(-96 + col * 64) + off_x, bn::fixed(-64 + row * 64) + off_y);
         }
     }
+    constexpr int FEET = 12;           // same "feet" offset the player uses for collision
+
+    int abs_int(int v) { return v < 0 ? -v : v; }
+
+    // A tiny random number generator (xorshift). Wandering only needs "random enough".
+    unsigned rng_state = 2463534242u;
+
+    int random_int(int limit)          // returns 0 .. limit-1
+    {
+        rng_state ^= rng_state << 13;
+        rng_state ^= rng_state >> 17;
+        rng_state ^= rng_state << 5;
+        return int(rng_state % unsigned(limit));
+    }
+
+    enum NpcState { NPC_WAIT, NPC_WALK };
+
+    struct Npc
+    {
+        bn::sprite_ptr sprite;
+        int map;                       // which map he lives on
+        bn::fixed x;                   // world position, same system as the player
+        bn::fixed y;
+        int home_x;                    // where he spawned; he never wanders far from it
+        int home_y;
+        int dir;
+        int state;
+        int timer;                     // frames left in the current state
+        int anim_timer;
+        int step;
+        int shown;
+
+        Npc(int map_id, int start_x, int start_y) :
+            sprite(bn::sprite_items::snep.create_sprite(0, 0, first_frame(DOWN, false))),
+            map(map_id), x(start_x), y(start_y), home_x(start_x), home_y(start_y),
+            dir(DOWN), state(NPC_WAIT), timer(60), anim_timer(0), step(0), shown(first_frame(DOWN, false))
+        {
+        }
+    };
+
+    // would a character standing at (px, py) overlap the NPC?
+    bool overlaps_npc(const Npc& npc, int map_id, int px, int py)
+    {
+        return npc.map == map_id && abs_int(px - npc.x.integer()) < 16 && abs_int(py - npc.y.integer()) < 12;
+    }
+
+    void update_npc(Npc& npc, int player_x, int player_y)
+    {
+        const bn::fixed speed = 1;   // half the player's walking speed
+        bool moving = false;
+
+        if(npc.state == NPC_WAIT)
+        {
+            if(--npc.timer <= 0)
+            {
+                npc.dir = random_int(4);              // 0..3 matches UP, DOWN, LEFT, RIGHT
+                npc.state = NPC_WALK;
+                npc.timer = 20 + random_int(40);      // walk for 20 to 59 frames
+            }
+        }
+        else
+        {
+            bn::fixed next_x = npc.x;
+            bn::fixed next_y = npc.y;
+            switch(npc.dir)
+            {
+                case UP:    next_y -= speed; break;
+                case DOWN:  next_y += speed; break;
+                case LEFT:  next_x -= speed; break;
+                default:    next_x += speed; break;
+            }
+
+            const int nx = next_x.integer();
+            const int ny = next_y.integer();
+            const bool free_ground = map_walkable(npc.map, nx, ny + FEET);
+            const bool near_home = abs_int(nx - npc.home_x) <= 48 && abs_int(ny - npc.home_y) <= 48;
+            const bool hits_player = abs_int(nx - player_x) < 16 && abs_int(ny - player_y) < 12;
+
+            if(free_ground && near_home && !hits_player)
+            {
+                npc.x = next_x;
+                npc.y = next_y;
+                moving = true;
+                if(--npc.timer <= 0) { npc.state = NPC_WAIT; npc.timer = 40 + random_int(80); }
+            }
+            else
+            {
+                npc.state = NPC_WAIT;                 // blocked: stop and think again
+                npc.timer = 20 + random_int(40);
+            }
+        }
+
+        // animation: exactly the same idea as the player's
+        if(moving)
+        {
+            if(++npc.anim_timer >= 8) { npc.anim_timer = 0; npc.step = (npc.step + 1) % 4; }
+        }
+        else
+        {
+            npc.step = 0;
+            npc.anim_timer = 0;
+        }
+
+        const int wanted = first_frame(npc.dir, false) + walk_cycle[npc.step];
+        if(wanted != npc.shown)
+        {
+            npc.shown = wanted;
+            npc.sprite.set_tiles(bn::sprite_items::snep.tiles_item(), wanted);
+        }
+    }
+
+    void face_player(Npc& npc, int player_x, int player_y)
+    {
+        const int dx = player_x - npc.x.integer();
+        const int dy = player_y - npc.y.integer();
+        if(abs_int(dx) > abs_int(dy)) { npc.dir = dx < 0 ? LEFT : RIGHT; }
+        else                          { npc.dir = dy < 0 ? UP : DOWN; }
+
+        npc.step = 0;
+        npc.shown = first_frame(npc.dir, false);      // standing frame, looking at the player
+        npc.sprite.set_tiles(bn::sprite_items::snep.tiles_item(), npc.shown);
+    }
+
+    // what he says; one string per A press (keep each under about 28 characters so it fits the screen)
+    constexpr const char* snep_lines[] =
+    {
+        "Filip:",
+        "Babe.",
+        "Why did you trap me in a game?",
+        "Im so fucking you later.",
+        "No one can see us here right?",
+        "...",
+        "Unless you upload the...",
+        "footage of this game.",
+    };
+    constexpr int snep_line_count = sizeof(snep_lines) / sizeof(snep_lines[0]);
 
     // ================================================================================
     // SCREENS
@@ -278,7 +419,7 @@ namespace
         enlarge(title, -20, 2);
 
         text.generate(0, 40, "PRESS START", prompt);
-        text.generate(-65,70, "Prototype v0.1.3", text_sprites);
+        text.generate(-65,70, "version " GAME_VER, text_sprites);
         text.generate(70,70, "By Waffles Fox", text_sprites);
 
         bool visible = true;
@@ -317,15 +458,15 @@ namespace
 
     void game_screen(bn::sprite_text_generator& text)
     {
-        int current_map = MAP_WORLD;
+        int current_map = MAP_HOUSE;
         bn::optional<bn::regular_bg_ptr> ground_bg = make_ground(current_map);
         bn::optional<bn::regular_bg_ptr> top_bg = make_top(current_map);
         ground_bg->set_priority(2);                       // ground: behind the player (backshot the tree)
         if(top_bg) { top_bg->set_priority(0); }           // roofs and canopies: in front of the player
 
         // the player's position in WORLD pixels (the middle of the first world)
-        bn::fixed x = world::pixel_w / 2;
-        bn::fixed y = world::pixel_h / 2;
+        bn::fixed x = 7 * T;
+        bn::fixed y = 11 * T;
 
         bn::vector<bn::sprite_ptr, 32> text_sprites;
         bn::vector<bn::sprite_ptr, 32> pause_text_sprites;
@@ -347,6 +488,15 @@ namespace
         bool paused = true;
 
         const int feet = 12;   // check the ground at the players feet, not the middle of the sprite
+        
+        Npc snep(MAP_WORLD, world::pixel_w / 2 + 88, world::pixel_h / 2 + 8);
+        snep.sprite.set_bg_priority(1);       // same layer as the player, so roofs and canopies cover him too
+        snep.sprite.set_visible(false);       // hidden until the first frame puts him in the right place
+
+        bool talking = false;
+        int talk_line = 0;
+        bn::vector<bn::sprite_ptr, 32> dialog_sprites;   // one sprite per letter of the line being shown
+        bn::vector<bn::sprite_ptr, 4> dialog_box;        // the black box behind the text
 
         // screen transition state
         bn::vector<bn::sprite_ptr, 12> blocks;   // the black block
@@ -354,7 +504,10 @@ namespace
         int trans_warp = 0;                      // which warp of the current map we are going through
         int trans_dir = DOWN;                    // the way the player was facing when it started
         bn::fixed trans_pos = 0;                 // 0 = the block covers the whole screen
-
+        // bool snepTalked = false;
+        // DEBUGGING THE TEXT BOX
+        // bn::vector<bn::sprite_ptr, 8> test_sprites;
+        // text.generate(0, -40, "TEST", test_sprites);
         while(true)
         {
             if(bn::keypad::start_pressed())
@@ -378,7 +531,7 @@ namespace
                 if(bn::keypad::right_held()) { dx += 1; }
                 if(bn::keypad::up_held())    { dy -= 1; }
                 if(bn::keypad::down_held())  { dy += 1; }
-                if(trans_phase != 0) { dx = 0; dy = 0; }   // the player stands still while the screen wipes
+                if(trans_phase != 0 || talking) { dx = 0; dy = 0; }   // the player stands still while the screen wipes and talking
 
                 const bool moving = dx != 0 || dy != 0;
                 const bool running = moving && bn::keypad::b_held();
@@ -390,13 +543,14 @@ namespace
                     else if(dx > 0) { dir = RIGHT; }
                     else if(dy < 0) { dir = UP;    }
                     else            { dir = DOWN;  }
-
-                    // each axis separately, so the player slides along walls instead of sticking
-                    // (collision asks the CURRENT map)
+                    
+                    // NPC collissions
                     bn::fixed next_x = x + dx * speed;
-                    if(map_walkable(current_map, next_x.integer(), (y + feet).integer())) { x = next_x; }
+                    if(map_walkable(current_map, next_x.integer(), (y + feet).integer()) &&
+                       !overlaps_npc(snep, current_map, next_x.integer(), y.integer())) { x = next_x; }
                     bn::fixed next_y = y + dy * speed;
-                    if(map_walkable(current_map, x.integer(), (next_y + feet).integer())) { y = next_y; }
+                    if(map_walkable(current_map, x.integer(), (next_y + feet).integer()) &&
+                       !overlaps_npc(snep, current_map, x.integer(), next_y.integer())) { y = next_y; }
 
                     if(++timer >= (running ? 5 : 8))   // lower number = faster animation
                     {
@@ -415,6 +569,49 @@ namespace
                 {
                     shown = wanted;
                     waffle.set_tiles(bn::sprite_items::waffle.tiles_item(), shown);
+                }
+                
+                // ---- NPC: wander, and talk when A is pressed next to him ----
+                if(current_map == snep.map && !talking)
+                {
+                    update_npc(snep, x.integer(), y.integer());
+                }
+
+                if(talking)
+                {
+                    if(bn::keypad::a_pressed())              // next line, or close the box after the last one
+                    {
+                        dialog_sprites.clear();
+                        if(++talk_line >= snep_line_count)
+                        {
+                            talking = false;
+                            dialog_box.clear();
+                        }
+                        else
+                        {
+                            text.generate(-90,40, snep_lines[0], dialog_sprites);
+                            text.generate(0, 56, snep_lines[talk_line], dialog_sprites);
+                        }
+                    }
+                }
+                else if(trans_phase == 0 && current_map == snep.map && bn::keypad::a_pressed() &&
+                        abs_int(x.integer() - snep.x.integer()) < 28 && abs_int(y.integer() - snep.y.integer()) < 28)
+                {
+                    talking = true;
+                    talk_line = 1;
+                    face_player(snep, x.integer(), y.integer());
+
+                    for(int i = 0; i < 4; ++i)               // a black box behind the text (reuses your transition sprite)
+                    {
+                        bn::sprite_ptr b = bn::sprite_items::black_block.create_sprite(bn::fixed(-96 + i * 64), 64);
+                        b.set_bg_priority(0);
+                        // b.set_z_order(-6000);
+                        dialog_box.push_back(b);
+                    }
+                    // text.set_z_order(-6000);                 // lower z order = drawn on top, so the text sits over the box
+                    text.generate(0, 56, snep_lines[talk_line], dialog_sprites);
+                    // text.generate(0,56, "HELLO", dialog_sprites);
+                    text.generate(-90,40, snep_lines[0], dialog_sprites);
                 }
 
                 // ---- warps: did the player's feet step into one? ----
@@ -488,7 +685,14 @@ namespace
                 ground_bg->set_position(bg_x, bg_y);
                 if(top_bg) { top_bg->set_position(bg_x, bg_y); }
 
+                // Draw CHaracters
                 waffle.set_position(x - cam_x, y - cam_y);
+                snep.sprite.set_visible(current_map == snep.map);
+                snep.sprite.set_position(snep.x - cam_x, snep.y - cam_y);
+
+                // depth sorting: whoever is lower on the map is drawn in front
+                waffle.set_z_order(-y.integer());
+                snep.sprite.set_z_order(-snep.y.integer());
             }
 
             if(!music.active())   // this chunk finished, so start the next one
