@@ -1,4 +1,4 @@
-#define GAME_VER "0.1.8"
+#define GAME_VER "0.2.9p"
 #include "bn_core.h"
 #include "bn_color.h"
 #include "bn_bg_palettes.h"
@@ -8,6 +8,7 @@
 #include "bn_sprite_ptr.h"
 #include "bn_sprite_text_generator.h"
 #include "bn_vector.h"
+#include "bn_string.h"
 #include "common_variable_8x16_sprite_font.h"
 #include "bn_sprite_items_player.h"
 #include "bn_sprite_affine_mat_ptr.h"
@@ -22,6 +23,7 @@
 //characters
 #include "bn_sprite_items_waffle.h"
 #include "bn_sprite_items_snep.h"
+#include "bn_sprite_items_umbreon.h"
 
 #include "bn_sprite_items_black_block.h"   // solid black 64x64, used by the screen transition
 
@@ -271,13 +273,252 @@ namespace
 
     enum NpcState { NPC_WAIT, NPC_WALK };
 
+    // ================================================================================
+    // NPCS
+    // PART 1 is the DATA you edit: dialogue + the NPC table.
+    // PART 2 is the machinery that runs them. Adding an NPC should never need PART 2.
+    // ================================================================================
+
+    // -------------------------------- PART 1: DATA --------------------------------
+
+    constexpr int DLG_END  = -1;     // use as a "next" to close the box
+    constexpr int DLG_KEEP = -1;     // use as "set_start" to leave the NPC's starting node alone
+
+    enum { ACT_NONE, ACT_FOLLOW, ACT_STOP_FOLLOW};   // things a dialogue node can make the NPC do
+
+    enum //traits
+    {
+        TRAIT_LAZY      = 1 << 0,
+        TRAIT_SPEEDY    = 1 << 1,
+        TRAIT_INTROVERT = 1 << 2,
+        TRAIT_EXTROVERT = 1 << 3,
+        TRAIT_WALKER    = 1 << 4,
+        TRAIT_PLAYFUL   = 1 << 5,
+    };
+
+    // one answer the player can pick
+    struct Choice
+    {
+        const char* text;            // keep it short (about 10 characters if there are 3 answers)
+        int next;                    // node to jump to when picked (DLG_END closes the box)
+    };
+
+    // one box of dialogue. A conversation is a set of these that point at each other by index.
+    struct DialogueNode
+    {
+        const char* text;            // what the NPC says (about 28 characters max)
+        int next;                    // node after this one when A is pressed (DLG_END closes the box)
+        const Choice* choices;       // nullptr = plain line; otherwise the player picks (LEFT/RIGHT, then A)
+        int choice_count;
+        int action;                  // ACT_... happens the moment this node appears
+        int set_start;               // >= 0: the next time you talk to this NPC, begin at this node instead
+    };
+
+    // a plain line:  say("text", next_node, action, new_start_node)   (everything after the text is optional)
+    constexpr DialogueNode say(const char* text, int next = DLG_END, int action = ACT_NONE, int set_start = DLG_KEEP)
+    {
+        return DialogueNode{ text, next, nullptr, 0, action, set_start };
+    }
+
+    // a question:  ask("text", the_choices_array)
+    template<int N>
+    constexpr DialogueNode ask(const char* text, const Choice (&choices)[N])
+    {
+        return DialogueNode{ text, DLG_END, choices, N, ACT_NONE, DLG_KEEP };
+    }
+
+    // The fixed facts about an NPC. These live in a constexpr table, so they cost no RAM.
+    struct NpcDef
+    {
+        const char* name;                    // shown above the dialogue (include the ":" yourself)
+        const bn::sprite_item* sprite_item;  // every NPC can use its own sprite sheet
+        int map;                             // which map they start on (MAP_WORLD, MAP_HOUSE, ...)
+        int x, y;                            // where they start, in world pixels
+        int wander_radius;                   // how far from home they wander; 0 = stands still
+        int traits;
+        const DialogueNode* nodes;           // their dialogue
+        int start_node;                      // the node a conversation begins with (nodes can change it later)
+    };
+
+    // ---- Snep's dialogue ----
+    // Give every node a name here so the tables below stay readable. The ORDER must match snep_nodes[].
+    enum SnepNode
+    {
+        SNEP_BABE, SNEP_TRAPPED, SNEP_LATER, SNEP_ALONE, SNEP_DOTS, SNEP_UPLOAD, SNEP_FOOTAGE,
+        SNEP_OKAY, SNEP_OKAY_YES, SNEP_OKAY_NO,
+        SNEP_MENU,
+        SNEP_FOLLOW_Q, SNEP_FOLLOW_YES, SNEP_CONCERN,SNEP_FOLLOW_NO,
+        SNEP_STOP_Q, SNEP_STOP_YES, SNEP_STOP_NO,
+    };
+
+    enum FoxNode
+    {
+        FOX_CLONE, FOX_WOAH, FOX_CONFUSE,
+        FOX_MENU, FOX_YES, FOX_NO,
+        FOX_STOP, FOX_STOP_YES, FOX_STOP_NO,
+    };
+
+    enum UmbNode
+    {
+        UMB_START, UMB_GREET, UMB_MAGICAL,
+        UMB_REST,
+        UMB_RECOMMEND, UMB_RECOMMEND_2, UMB_YES, UMB_NO,
+        UMB_STOP_Q, UMB_STOP_Y, UMB_STOP_N,
+        UMB_RECOMMEND3,
+    };
+
+    constexpr Choice snep_okay_choices[]   = { { "Yes", SNEP_OKAY_YES }, { "Not really", SNEP_OKAY_NO } };
+    constexpr Choice snep_menu_choices[]   = { { "Follow me", SNEP_FOLLOW_Q }, { "Nothing", DLG_END } };
+    constexpr Choice snep_follow_choices[] = { { "Yes", SNEP_FOLLOW_YES }, { "No", SNEP_FOLLOW_NO } };
+    constexpr Choice snep_stop_choices[]   = { { "Wait here", SNEP_STOP_YES }, { "Keep going", SNEP_STOP_NO } };
+    
+    constexpr Choice fox_follow_choices[] = {{"Yes", FOX_YES}, {"No", FOX_NO}};
+    constexpr Choice fox_stop_choices[] = {{"Yes", FOX_STOP_YES}, {"No", FOX_STOP_NO}};
+
+    constexpr Choice umb_follow_choices[] = {{"Yes", UMB_YES}, {"No", UMB_NO}};
+    constexpr Choice umb_stop_choices[] = {{"Right here", UMB_STOP_Y}, {"Not yet", UMB_STOP_N}};
+
+    constexpr DialogueNode snep_nodes[] =
+    {
+        /* SNEP_BABE       */ say("Babe.", SNEP_TRAPPED),
+        /* SNEP_TRAPPED    */ say("Why did you trap me in a game?", SNEP_LATER),
+        /* SNEP_LATER      */ say("Im so gonna date you later.", SNEP_ALONE),
+        /* SNEP_ALONE      */ say("No one can see us here right?", SNEP_DOTS),
+        /* SNEP_DOTS       */ say("...", SNEP_UPLOAD),
+        /* SNEP_UPLOAD     */ say("Unless you upload the...", SNEP_FOOTAGE),
+        /* SNEP_FOOTAGE    */ say("footage of this game.", SNEP_OKAY),
+        /* SNEP_OKAY       */ ask("Are you okay?", snep_okay_choices),
+        // after either answer, next time you talk to him he starts at SNEP_MENU instead of the intro
+        /* SNEP_OKAY_YES   */ say("Good. I was worried.", DLG_END, ACT_NONE, SNEP_MENU),
+        /* SNEP_OKAY_NO    */ say("Aw... I'm here for you.", DLG_END, ACT_NONE, SNEP_MENU),
+        /* SNEP_MENU       */ ask("Need anything?", snep_menu_choices),
+        /* SNEP_FOLLOW_Q   */ ask("Huh, want me to follow you?", snep_follow_choices),
+        // ACT_FOLLOW turns following on; set_start makes the NEXT talk begin with "want me to wait here?"
+        /* SNEP_FOLLOW_YES */ say("Okay! You can run", SNEP_CONCERN),
+                              say("Im sure I can keep up!", DLG_END, ACT_FOLLOW, SNEP_STOP_Q),
+        /* SNEP_FOLLOW_NO  */ say("Alright, I'll stay here."),
+        /* SNEP_STOP_Q     */ ask("Want me to wait here?", snep_stop_choices),
+        /* SNEP_STOP_YES   */ say("Okay, I'll wait here.", DLG_END, ACT_STOP_FOLLOW, SNEP_MENU),
+        /* SNEP_STOP_NO    */ say("Okay, lets go!"),
+    };
+
+    constexpr DialogueNode fox_nodes[]=
+    {
+        say("Woah", FOX_WOAH),
+        say("You're Me! I'm You!", FOX_CONFUSE),
+        say("Well Hi there cutie!", DLG_END, ACT_NONE, FOX_MENU),
+        ask("Huh, want me to follow you?", fox_follow_choices),
+        say("Oh, Okay. Lets go :3", DLG_END, ACT_FOLLOW, FOX_STOP ),
+        say("Oh, uhm okay then,"),
+        ask("Want me to stop following you?",fox_stop_choices),
+        say("Okay then, Unfollowed!", DLG_END, ACT_STOP_FOLLOW, FOX_MENU),
+        say("Okay, lets gooo uwu!"),
+
+    };
+    constexpr DialogueNode umb_nodes[]=
+    {
+        say("Wsg Waffles owo", UMB_GREET),
+        say("I'm just chilling in this forest", UMB_MAGICAL),
+        say("I'm thinking of practicing my Dark Magic", DLG_END, ACT_NONE, UMB_REST),
+        say("Still working on it owo", DLG_END, ACT_NONE, UMB_RECOMMEND),
+        say("Do you know a better place for me", UMB_RECOMMEND_2),
+        ask("to practice my dark magic?", umb_follow_choices),
+        say("Alright owo, show me", DLG_END, ACT_FOLLOW, UMB_STOP_Q),
+        say("Aww, alright then."),
+        ask("So... Here?", umb_stop_choices),
+        say("Alright, Thanks!", DLG_END, ACT_STOP_FOLLOW, UMB_RECOMMEND3),
+        say("Oooo Alr"),
+        say("Yeah this is better.. but", UMB_RECOMMEND),
+    };
+
+    // TO ADD AN NPC:
+    //  1. #include its sprite header at the top ("bn_sprite_items_<name>.h")
+    //     (its sheet needs the same frame layout as the others, because first_frame() is shared)
+    //  2. write its dialogue like snep_nodes above (an enum of node names, choice arrays, a nodes array)
+    //  3. add one line to this table
+    constexpr NpcDef npc_defs[] =
+    {
+        //  name       sprite                    map        x                        y                     wander    traits          nodes       start
+        { "Filip:",  &bn::sprite_items::snep,  MAP_WORLD, world::pixel_w / 2 + 88, world::pixel_h / 2 + 8,  48 * T,   TRAIT_EXTROVERT, snep_nodes, SNEP_BABE },
+        { "Waffles:", &bn::sprite_items::waffle, MAP_WORLD, world::pixel_w/2 + 50, world::pixel_h/2 + 10, 90 * T, TRAIT_PLAYFUL | TRAIT_INTROVERT, fox_nodes, FOX_CLONE},
+        { "Umbreon:", &bn::sprite_items::umbreon, MAP_WORLD2, world::pixel_w/2 + 50, world::pixel_h/2 + 30, 30 * T, TRAIT_WALKER | TRAIT_PLAYFUL, umb_nodes, UMB_START},
+    };
+    constexpr int npc_count = sizeof(npc_defs) / sizeof(npc_defs[0]);
+
+    // -------------------------------- PART 2: MACHINERY --------------------------------
+
+    // What has to survive when an NPC's sprite is thrown away (every map change frees the sprites):
+    // where they are, which map, whether they follow the player, and where their dialogue starts.
+    struct Temperament
+    {
+        bn::fixed speed = 1;
+        int wait_min = 40, wait_range = 80;    // frames standing still: wait_min + random(wait_range)
+        int walk_min = 20, walk_range = 40;    // frames walking
+        int run_chance = 0;                    // % chance that a walk is a run
+    };
+
+    Temperament temperament_of(int traits)
+    {
+        Temperament t;
+        if(traits & TRAIT_LAZY)
+        {
+            t.speed *= bn::fixed(0.5);
+            t.wait_min = 100; t.wait_range = 120;
+            t.walk_min = 10;  t.walk_range = 20;
+        }
+        if(traits & TRAIT_SPEEDY)
+        {
+            t.speed *= bn::fixed(1.5);
+            t.wait_min = 20; t.wait_range = 40;
+        }
+        if(traits & TRAIT_PLAYFUL)
+        {
+            t.wait_min = 10; t.wait_range = 30;
+            t.walk_min = 40; t.walk_range = 60;
+            t.run_chance = 30;
+        }
+        if(traits & TRAIT_WALKER)
+        {
+            t.wait_min = 0; t.wait_range = 1;        // range must be at least 1 (random_int(0) is bad)
+            t.walk_min = 40; t.walk_range = 60;
+        }
+        return t;
+    }
+
+    struct NpcSave
+    {
+        int map;
+        int x, y;
+        int home_x, home_y;
+        int start_node;
+        bool following;
+    };
+
+    NpcSave npc_save[npc_count];
+
+    void init_npc_saves()
+    {
+        for(int i = 0; i < npc_count; ++i)
+        {
+            const NpcDef& d = npc_defs[i];
+            npc_save[i] = NpcSave{ d.map, d.x, d.y, d.x, d.y, d.start_node, false };
+        }
+    }
+
+    constexpr int FOLLOW_GAP      = 24;   // a follower stops when it is this close to the player (pixels)
+    constexpr int FOLLOW_RUN_FAR  = 64;   // farther than this (dx + dy) and the follower starts running...
+    constexpr int FOLLOW_RUN_NEAR = 40;   // ...until it is closer than this again
+
+    // The live state of an NPC that exists right now (only NPCs on the current map are created).
     struct Npc
     {
+        int id;                        // index into npc_defs / npc_save
+        const NpcDef* def;             // everything fixed about them: sprite sheet, dialogue...
         bn::sprite_ptr sprite;
-        int map;                       // which map he lives on
+        int map;                       // the map they are on right now
         bn::fixed x;                   // world position, same system as the player
         bn::fixed y;
-        int home_x;                    // where he spawned; he never wanders far from it
+        int home_x;                    // wanderers never go far from here
         int home_y;
         int dir;
         int state;
@@ -285,71 +526,251 @@ namespace
         int anim_timer;
         int step;
         int shown;
+        int start_node;                // where the next conversation begins
+        bool following;                // true = walks after the player
+        bool running;                  // followers run when the player gets too far
 
-        Npc(int map_id, int start_x, int start_y) :
-            sprite(bn::sprite_items::snep.create_sprite(0, 0, first_frame(DOWN, false))),
-            map(map_id), x(start_x), y(start_y), home_x(start_x), home_y(start_y),
-            dir(DOWN), state(NPC_WAIT), timer(60), anim_timer(0), step(0), shown(first_frame(DOWN, false))
+        Npc(int npc_id) :
+            id(npc_id),
+            def(&npc_defs[npc_id]),
+            sprite(npc_defs[npc_id].sprite_item->create_sprite(0, 0, first_frame(DOWN, false))),
+            map(npc_save[npc_id].map),
+            x(npc_save[npc_id].x),
+            y(npc_save[npc_id].y),
+            home_x(npc_save[npc_id].home_x),
+            home_y(npc_save[npc_id].home_y),
+            dir(DOWN), state(NPC_WAIT), timer(60), anim_timer(0), step(0), shown(first_frame(DOWN, false)),
+            start_node(npc_save[npc_id].start_node),
+            following(npc_save[npc_id].following),
+            running(false)
         {
+            sprite.set_bg_priority(1);     // same layer as the player, so roofs and canopies cover them too
+            sprite.set_visible(false);     // hidden until the first frame puts them in the right place
         }
     };
 
-    // would a character standing at (px, py) overlap the NPC?
-    bool overlaps_npc(const Npc& npc, int map_id, int px, int py)
+    // Throw away the NPCs of the old map (this frees their sprites) and create the ones standing on map_id.
+    // Followers come with the player: they are moved to the player's position first.
+    void spawn_npcs(bn::ivector<Npc>& npcs, int map_id, int player_x, int player_y)
     {
-        return npc.map == map_id && abs_int(px - npc.x.integer()) < 16 && abs_int(py - npc.y.integer()) < 12;
+        for(const Npc& n : npcs)                     // remember what the old NPCs were doing
+        {
+            NpcSave& s = npc_save[n.id];
+            s.x = n.x.integer();
+            s.y = n.y.integer();
+            s.home_x = n.home_x;
+            s.home_y = n.home_y;
+            s.start_node = n.start_node;
+            s.following = n.following;
+        }
+        npcs.clear();
+
+        for(int i = 0; i < npc_count; ++i)
+        {
+            if(npc_save[i].following)
+            {
+                npc_save[i].map = map_id;
+                npc_save[i].x = player_x;
+                npc_save[i].y = player_y;
+            }
+        }
+
+        for(int i = 0; i < npc_count; ++i)
+        {
+            if(npc_save[i].map == map_id && !npcs.full()) { npcs.emplace_back(i); }
+        }
     }
 
-    void update_npc(Npc& npc, int player_x, int player_y)
+    bool boxes_touch(int ax, int ay, int bx, int by)
     {
-        const bn::fixed speed = 1;   // half the player's walking speed
+        return abs_int(ax - bx) < 16 && abs_int(ay - by) < 12;
+    }
+
+    // Does stepping from (cx, cy) to (nx, ny) run INTO the thing at (ox, oy)?
+    // If you already overlap it you are free to walk away, so nobody can ever get stuck inside someone.
+    bool bumps(int cx, int cy, int nx, int ny, int ox, int oy)
+    {
+        return boxes_touch(nx, ny, ox, oy) && !boxes_touch(cx, cy, ox, oy);
+    }
+
+    // would the player, stepping from (cx, cy) to (nx, ny), run into an NPC?
+    bool blocked_by_npc(const bn::ivector<Npc>& npcs, int cx, int cy, int nx, int ny)
+    {
+        for(const Npc& n : npcs)
+        {
+            if(bumps(cx, cy, nx, ny, n.x.integer(), n.y.integer())) { return true; }
+        }
+        return false;
+    }
+
+    // the closest NPC the player is near enough to talk to, or nullptr
+    Npc* npc_in_reach(bn::ivector<Npc>& npcs, int player_x, int player_y)
+    {
+        Npc* best = nullptr;
+        int best_dist = 0;
+        for(Npc& n : npcs)
+        {
+            const int dx = abs_int(player_x - n.x.integer());
+            const int dy = abs_int(player_y - n.y.integer());
+            if(dx < 28 && dy < 28 && (best == nullptr || dx + dy < best_dist))
+            {
+                best = &n;
+                best_dist = dx + dy;
+            }
+        }
+        return best;
+    }
+
+    // Try to move an NPC one step in a direction. Returns false (and does nothing) if something is in the way.
+    // assumes UP, DOWN, LEFT, RIGHT = 0, 1, 2, 3, so "dir ^ 1" is the opposite direction
+    int pick_wander_dir(const Npc& npc, int player_x, int player_y)
+    {
+        const int dx = player_x - npc.x.integer();
+        const int dy = player_y - npc.y.integer();
+        const int dist = abs_int(dx) + abs_int(dy);
+        const int toward = abs_int(dx) > abs_int(dy) ? (dx < 0 ? LEFT : RIGHT) : (dy < 0 ? UP : DOWN);
+        const int traits = npc.def->traits;
+
+        if((traits & TRAIT_INTROVERT) && dist < 80 && random_int(100) < 70) { return toward ^ 1; }  // shy: walk away
+        if((traits & TRAIT_EXTROVERT) && dist > 48 && random_int(100) < 65) { return toward; }      // drift closer
+        return random_int(4);
+    }
+    bool npc_step(Npc& npc, const bn::ivector<Npc>& all_npcs, int dir, bn::fixed speed,
+                  int player_x, int player_y, bool stay_near_home)
+    {
+        bn::fixed next_x = npc.x;
+        bn::fixed next_y = npc.y;
+        switch(dir)
+        {
+            case UP:    next_y -= speed; break;
+            case DOWN:  next_y += speed; break;
+            case LEFT:  next_x -= speed; break;
+            default:    next_x += speed; break;
+        }
+
+        const int cx = npc.x.integer();
+        const int cy = npc.y.integer();
+        const int nx = next_x.integer();
+        const int ny = next_y.integer();
+
+        if(!map_walkable(npc.map, nx, ny + FEET)) { return false; }
+
+        if(stay_near_home)
+        {
+            const int radius = npc.def->wander_radius;
+            if(abs_int(nx - npc.home_x) > radius || abs_int(ny - npc.home_y) > radius) { return false; }
+        }
+
+        if(bumps(cx, cy, nx, ny, player_x, player_y)) { return false; }
+
+        for(const Npc& other : all_npcs)                  // don't walk into the other NPCs either
+        {
+            if(&other != &npc && bumps(cx, cy, nx, ny, other.x.integer(), other.y.integer())) { return false; }
+        }
+
+        npc.x = next_x;
+        npc.y = next_y;
+        npc.dir = dir;
+        return true;
+    }
+    void begin_walk(Npc& npc, int player_x, int player_y)
+    {
+        const Temperament t = temperament_of(npc.def->traits);
+        npc.dir = pick_wander_dir(npc, player_x, player_y);
+        npc.state = NPC_WALK;
+        npc.timer = t.walk_min + random_int(t.walk_range);
+        npc.running = random_int(100) < t.run_chance;     // playful NPCs sometimes run this walk
+    }
+
+    void begin_wait(Npc& npc)
+    {
+        const Temperament t = temperament_of(npc.def->traits);
+        npc.state = NPC_WAIT;
+        npc.timer = t.wait_min + random_int(t.wait_range);
+        npc.running = false;
+
+    }
+    void update_npc(Npc& npc, const bn::ivector<Npc>& all_npcs, int player_x, int player_y)
+    {
         bool moving = false;
 
-        if(npc.state == NPC_WAIT)
+        if(npc.following)
         {
-            if(--npc.timer <= 0)
+            // ---- follow the player ----
+            const int dx = player_x - npc.x.integer();
+            const int dy = player_y - npc.y.integer();
+            const int adx = abs_int(dx);
+            const int ady = abs_int(dy);
+
+            // too far away? run. (two different limits so they don't flicker between walking and running)
+            const int farthest = adx > ady ? adx : ady;
+
+            if(farthest > FOLLOW_RUN_FAR)       { npc.running = true; }
+            else if(farthest < FOLLOW_RUN_NEAR) { npc.running = false; }
+
+            if(adx >= FOLLOW_GAP || ady >= FOLLOW_GAP)    // not close enough yet
             {
-                npc.dir = random_int(4);              // 0..3 matches UP, DOWN, LEFT, RIGHT
-                npc.state = NPC_WALK;
-                npc.timer = 20 + random_int(40);      // walk for 20 to 59 frames
+                const bn::fixed speed = npc.running ? 1.75 : 1;   // runs a bit faster than the player so they catch up
+
+                // go along the axis that is farther away; keep the current axis unless the other one is clearly bigger
+                const bool horizontal_first = (npc.dir == LEFT || npc.dir == RIGHT) ? (adx + 6 > ady) : (adx > ady + 6);
+                const int dir_x = dx < 0 ? LEFT : RIGHT;
+                const int dir_y = dy < 0 ? UP : DOWN;
+
+                moving = npc_step(npc, all_npcs, horizontal_first ? dir_x : dir_y, speed, player_x, player_y, false);
+                if(!moving)    // blocked: try the other axis, this slides them around corners
+                {
+                    moving = npc_step(npc, all_npcs, horizontal_first ? dir_y : dir_x, speed, player_x, player_y, false);
+                }
+            }
+        }
+        else if(npc.def->wander_radius > 0)
+        {
+            const bool walker  = npc.def->traits & TRAIT_WALKER;
+            const bool leashed = !(npc.def->traits & TRAIT_EXTROVERT);
+
+            if(npc.state == NPC_WAIT)
+            {
+                if(--npc.timer <= 0) { begin_walk(npc, player_x, player_y); }
+            }
+            else
+            {
+                const Temperament t = temperament_of(npc.def->traits);
+                const bn::fixed speed = npc.running ? t.speed * bn::fixed(1.75) : t.speed;
+
+                moving = npc_step(npc, all_npcs, npc.dir, speed, player_x, player_y, leashed);
+
+                if(!moving && walker)
+                {
+                    // walkers never stand around: bounce off and try other directions in the same frame
+                    for(int tries = 0; tries < 4 && !moving; ++tries)
+                    {
+                        begin_walk(npc, player_x, player_y);
+                        moving = npc_step(npc, all_npcs, npc.dir, speed, player_x, player_y, leashed);
+                    }
+                }
+                else if(!moving)
+                {
+                    begin_wait(npc);                          // blocked: stop and think
+                }
+
+                if(moving && --npc.timer <= 0)
+                {
+                    if(walker) { begin_walk(npc, player_x, player_y); }
+                    else       { begin_wait(npc); }
+                }
             }
         }
         else
         {
-            bn::fixed next_x = npc.x;
-            bn::fixed next_y = npc.y;
-            switch(npc.dir)
-            {
-                case UP:    next_y -= speed; break;
-                case DOWN:  next_y += speed; break;
-                case LEFT:  next_x -= speed; break;
-                default:    next_x += speed; break;
-            }
-
-            const int nx = next_x.integer();
-            const int ny = next_y.integer();
-            const bool free_ground = map_walkable(npc.map, nx, ny + FEET);
-            const bool near_home = abs_int(nx - npc.home_x) <= 48 && abs_int(ny - npc.home_y) <= 48;
-            const bool hits_player = abs_int(nx - player_x) < 16 && abs_int(ny - player_y) < 12;
-
-            if(free_ground && near_home && !hits_player)
-            {
-                npc.x = next_x;
-                npc.y = next_y;
-                moving = true;
-                if(--npc.timer <= 0) { npc.state = NPC_WAIT; npc.timer = 40 + random_int(80); }
-            }
-            else
-            {
-                npc.state = NPC_WAIT;                 // blocked: stop and think again
-                npc.timer = 20 + random_int(40);
-            }
+            return;                                       // stands still
         }
 
-        // animation: exactly the same idea as the player's
+        // animation: exactly the same idea as the player's (running uses the running frames)
+        const bool run_frames = moving && npc.running;
         if(moving)
         {
-            if(++npc.anim_timer >= 8) { npc.anim_timer = 0; npc.step = (npc.step + 1) % 4; }
+            if(++npc.anim_timer >= (run_frames ? 5 : 8)) { npc.anim_timer = 0; npc.step = (npc.step + 1) % 4; }
         }
         else
         {
@@ -357,11 +778,11 @@ namespace
             npc.anim_timer = 0;
         }
 
-        const int wanted = first_frame(npc.dir, false) + walk_cycle[npc.step];
+        const int wanted = first_frame(npc.dir, run_frames) + walk_cycle[npc.step];
         if(wanted != npc.shown)
         {
             npc.shown = wanted;
-            npc.sprite.set_tiles(bn::sprite_items::snep.tiles_item(), wanted);
+            npc.sprite.set_tiles(npc.def->sprite_item->tiles_item(), wanted);
         }
     }
 
@@ -374,22 +795,138 @@ namespace
 
         npc.step = 0;
         npc.shown = first_frame(npc.dir, false);      // standing frame, looking at the player
-        npc.sprite.set_tiles(bn::sprite_items::snep.tiles_item(), npc.shown);
+        npc.sprite.set_tiles(npc.def->sprite_item->tiles_item(), npc.shown);
     }
 
-    // what he says; one string per A press (keep each under about 28 characters so it fits the screen)
-    constexpr const char* snep_lines[] =
+    // ================================================================================
+    // THE DIALOGUE BOX
+    // ================================================================================
+
+    struct Conversation
     {
-        "Filip:",
-        "Babe.",
-        "Why did you trap me in a game?",
-        "Im so fucking you later.",
-        "No one can see us here right?",
-        "...",
-        "Unless you upload the...",
-        "footage of this game.",
+        Npc* npc = nullptr;                          // who we are talking to; nullptr = nobody
+        int node = 0;                                // which DialogueNode of theirs is on screen
+        int choice = 0;                              // which answer is highlighted (when the node asks something)
+        bn::vector<bn::sprite_ptr, 48> text_sprites; // the name and the line
+        bn::vector<bn::sprite_ptr, 32> choice_sprites;
+        bn::vector<bn::sprite_ptr, 4> box;           // the black box behind the text
+
+        bool active() const { return npc != nullptr; }
     };
-    constexpr int snep_line_count = sizeof(snep_lines) / sizeof(snep_lines[0]);
+
+    void end_conversation(Conversation& c)
+    {
+        c.npc = nullptr;
+        c.text_sprites.clear();
+        c.choice_sprites.clear();
+        c.box.clear();
+    }
+
+    // the answers sit side by side on the bottom row; the highlighted one gets a "> " in front
+    void draw_choices(Conversation& c, bn::sprite_text_generator& text)
+    {
+        const DialogueNode& node = c.npc->def->nodes[c.node];
+        const int n = node.choice_count;
+        const int spacing = n <= 2 ? 120 : 80;
+
+        c.choice_sprites.clear();
+        for(int i = 0; i < n; ++i)
+        {
+            bn::string<24> label(i == c.choice ? "> " : "  ");
+            label.append(node.choices[i].text);
+            text.generate((2 * i - (n - 1)) * spacing / 2, 72, label, c.choice_sprites);
+        }
+    }
+
+    // put a node on screen (and do whatever the node says should happen)
+    void show_node(Conversation& c, bn::sprite_text_generator& text)
+    {
+        Npc& npc = *c.npc;
+        const DialogueNode& node = npc.def->nodes[c.node];
+
+        if(node.action == ACT_FOLLOW)
+        {
+            npc.following = true;
+        }
+        else if(node.action == ACT_STOP_FOLLOW)
+        {
+            npc.following = false;
+            npc.running = false;
+            npc.home_x = npc.x.integer();             // from now on they wander around the spot they were told to wait at
+            npc.home_y = npc.y.integer();
+            npc.state = NPC_WAIT;
+            npc.timer = 60;
+        }
+        if(node.set_start >= 0) { npc.start_node = node.set_start; }
+
+        c.text_sprites.clear();
+        c.choice_sprites.clear();
+        text.generate(-90, 40, npc.def->name, c.text_sprites);
+        text.generate(0, 56, node.text, c.text_sprites);
+
+        c.choice = 0;
+        if(node.choice_count > 0) { draw_choices(c, text); }
+    }
+
+    void start_conversation(Conversation& c, Npc& npc, int player_x, int player_y, bn::sprite_text_generator& text)
+    {
+        c.npc = &npc;
+        c.node = npc.start_node;
+        face_player(npc, player_x, player_y);
+
+        for(int i = 0; i < 4; ++i)                   // a black box behind the text (reuses your transition sprite)
+        {
+            bn::sprite_ptr b = bn::sprite_items::black_block.create_sprite(bn::fixed(-96 + i * 64), 64);
+            b.set_bg_priority(0);
+            c.box.push_back(b);
+        }
+        show_node(c, text);
+    }
+
+    // called every frame while a conversation is open
+    void update_conversation(Conversation& c, bn::sprite_text_generator& text)
+    {
+        const DialogueNode& node = c.npc->def->nodes[c.node];
+        bool advance = false;
+        int next = node.next;
+
+        if(node.choice_count > 0)
+        {
+            if(bn::keypad::left_pressed() && c.choice > 0)
+            {
+                --c.choice;
+                draw_choices(c, text);
+            }
+            else if(bn::keypad::right_pressed() && c.choice < node.choice_count - 1)
+            {
+                ++c.choice;
+                draw_choices(c, text);
+            }
+
+            if(bn::keypad::a_pressed())
+            {
+                next = node.choices[c.choice].next;
+                advance = true;
+            }
+        }
+        else if(bn::keypad::a_pressed())
+        {
+            advance = true;
+        }
+
+        if(advance)
+        {
+            if(next == DLG_END)
+            {
+                end_conversation(c);
+            }
+            else
+            {
+                c.node = next;
+                show_node(c, text);
+            }
+        }
+    }
 
     // ================================================================================
     // SCREENS
@@ -489,14 +1026,11 @@ namespace
 
         const int feet = 12;   // check the ground at the players feet, not the middle of the sprite
         
-        Npc snep(MAP_WORLD, world::pixel_w / 2 + 88, world::pixel_h / 2 + 8);
-        snep.sprite.set_bg_priority(1);       // same layer as the player, so roofs and canopies cover him too
-        snep.sprite.set_visible(false);       // hidden until the first frame puts him in the right place
+        init_npc_saves();
+        bn::vector<Npc, 8> npcs;              // the NPCs of the CURRENT map only (rebuilt on every map change)
+        spawn_npcs(npcs, current_map, x.integer(), y.integer());
 
-        bool talking = false;
-        int talk_line = 0;
-        bn::vector<bn::sprite_ptr, 32> dialog_sprites;   // one sprite per letter of the line being shown
-        bn::vector<bn::sprite_ptr, 4> dialog_box;        // the black box behind the text
+        Conversation talk;                    // the dialogue box: who we talk to, which node, which answer is picked
 
         // screen transition state
         bn::vector<bn::sprite_ptr, 12> blocks;   // the black block
@@ -531,7 +1065,7 @@ namespace
                 if(bn::keypad::right_held()) { dx += 1; }
                 if(bn::keypad::up_held())    { dy -= 1; }
                 if(bn::keypad::down_held())  { dy += 1; }
-                if(trans_phase != 0 || talking) { dx = 0; dy = 0; }   // the player stands still while the screen wipes and talking
+                if(trans_phase != 0 || talk.active()) { dx = 0; dy = 0; }   // the player stands still while the screen wipes and talking
 
                 const bool moving = dx != 0 || dy != 0;
                 const bool running = moving && bn::keypad::b_held();
@@ -547,10 +1081,10 @@ namespace
                     // NPC collissions
                     bn::fixed next_x = x + dx * speed;
                     if(map_walkable(current_map, next_x.integer(), (y + feet).integer()) &&
-                       !overlaps_npc(snep, current_map, next_x.integer(), y.integer())) { x = next_x; }
+                       !blocked_by_npc(npcs, x.integer(), y.integer(), next_x.integer(), y.integer())) { x = next_x; }
                     bn::fixed next_y = y + dy * speed;
                     if(map_walkable(current_map, x.integer(), (next_y + feet).integer()) &&
-                       !overlaps_npc(snep, current_map, x.integer(), next_y.integer())) { y = next_y; }
+                       !blocked_by_npc(npcs, x.integer(), y.integer(), x.integer(), next_y.integer())) { y = next_y; }
 
                     if(++timer >= (running ? 5 : 8))   // lower number = faster animation
                     {
@@ -571,47 +1105,27 @@ namespace
                     waffle.set_tiles(bn::sprite_items::waffle.tiles_item(), shown);
                 }
                 
-                // ---- NPC: wander, and talk when A is pressed next to him ----
-                if(current_map == snep.map && !talking)
+                // ---- NPCs: wander or follow (they freeze while you talk) ----
+                if(!talk.active())
                 {
-                    update_npc(snep, x.integer(), y.integer());
-                }
-
-                if(talking)
-                {
-                    if(bn::keypad::a_pressed())              // next line, or close the box after the last one
+                    for(Npc& n : npcs)
                     {
-                        dialog_sprites.clear();
-                        if(++talk_line >= snep_line_count)
-                        {
-                            talking = false;
-                            dialog_box.clear();
-                        }
-                        else
-                        {
-                            text.generate(-90,40, snep_lines[0], dialog_sprites);
-                            text.generate(0, 56, snep_lines[talk_line], dialog_sprites);
-                        }
+                        update_npc(n, npcs, x.integer(), y.integer());
                     }
                 }
-                else if(trans_phase == 0 && current_map == snep.map && bn::keypad::a_pressed() &&
-                        abs_int(x.integer() - snep.x.integer()) < 28 && abs_int(y.integer() - snep.y.integer()) < 28)
-                {
-                    talking = true;
-                    talk_line = 1;
-                    face_player(snep, x.integer(), y.integer());
 
-                    for(int i = 0; i < 4; ++i)               // a black box behind the text (reuses your transition sprite)
+                // ---- talking ----
+                if(talk.active())
+                {
+                    update_conversation(talk, text);
+                }
+                else if(trans_phase == 0 && bn::keypad::a_pressed())
+                {
+                    Npc* target = npc_in_reach(npcs, x.integer(), y.integer());   // nearest NPC within reach
+                    if(target)
                     {
-                        bn::sprite_ptr b = bn::sprite_items::black_block.create_sprite(bn::fixed(-96 + i * 64), 64);
-                        b.set_bg_priority(0);
-                        // b.set_z_order(-6000);
-                        dialog_box.push_back(b);
+                        start_conversation(talk, *target, x.integer(), y.integer(), text);
                     }
-                    // text.set_z_order(-6000);                 // lower z order = drawn on top, so the text sits over the box
-                    text.generate(0, 56, snep_lines[talk_line], dialog_sprites);
-                    // text.generate(0,56, "HELLO", dialog_sprites);
-                    text.generate(-90,40, snep_lines[0], dialog_sprites);
                 }
 
                 // ---- warps: did the player's feet step into one? ----
@@ -657,6 +1171,9 @@ namespace
                         ground_bg->set_priority(2);
                         if(top_bg) { top_bg->set_priority(0); }
 
+                        end_conversation(talk);                       // (safety) never keep pointing at an NPC that is about to vanish
+                        spawn_npcs(npcs, current_map, x.integer(), y.integer());   // old NPCs are stored + freed, new ones created, followers tag along
+
                         text_sprites.clear();                         // update the name in the corner
                         text.generate(-65,70, map_name(current_map), text_sprites);
 
@@ -687,12 +1204,15 @@ namespace
 
                 // Draw CHaracters
                 waffle.set_position(x - cam_x, y - cam_y);
-                snep.sprite.set_visible(current_map == snep.map);
-                snep.sprite.set_position(snep.x - cam_x, snep.y - cam_y);
+                for(Npc& n : npcs)
+                {
+                    n.sprite.set_visible(true);
+                    n.sprite.set_position(n.x - cam_x, n.y - cam_y);
+                    n.sprite.set_z_order(-n.y.integer());         // lower on the map = drawn in front
+                }
 
                 // depth sorting: whoever is lower on the map is drawn in front
                 waffle.set_z_order(-y.integer());
-                snep.sprite.set_z_order(-snep.y.integer());
             }
 
             if(!music.active())   // this chunk finished, so start the next one
