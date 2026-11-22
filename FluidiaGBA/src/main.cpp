@@ -1,4 +1,4 @@
-#define GAME_VER "0.2.9p"
+#define GAME_VER "0.3.4p"
 #include "bn_core.h"
 #include "bn_color.h"
 #include "bn_bg_palettes.h"
@@ -26,6 +26,7 @@
 #include "bn_sprite_items_umbreon.h"
 
 #include "bn_sprite_items_black_block.h"   // solid black 64x64, used by the screen transition
+#include "phone.h"
 
 // the maps: ground picture, the layer drawn in front of the player, and the collision grids
 #include "bn_regular_bg_items_world.h"
@@ -40,7 +41,7 @@
 
 namespace
 {
-    constexpr int music_chunks = 5;   // how many chunks
+    // constexpr int music_chunks = 5;   // how many chunks
     constexpr int walk_cycle[4] = {0,1,0,2}; // the animation >w<
     enum Dir {UP = 0, DOWN = 1, LEFT = 2, RIGHT = 3};
 
@@ -56,25 +57,68 @@ namespace
         return v;
     }
 
-    bn::sound_item music_chunk(int index) // title music
+    struct MusicTrack
     {
-        switch(index)
-        {
-            case 0:  return bn::sound_items::title_00;
-            case 1:  return bn::sound_items::title_01;
-            case 2:  return bn::sound_items::title_02;
-            case 3: return bn::sound_items::title_03;
-            default: return bn::sound_items::title_04;
-        }
+        const bn::sound_item* chunks;   // played one after another, looping forever
+        int count;
+        bn::fixed volume;               // 0 to 1
+    };
+
+    template<int N>
+    constexpr MusicTrack make_track(const bn::sound_item (&chunks)[N], bn::fixed volume = 1)
+    {
+        return MusicTrack{ chunks, N, volume };
     }
-    bn::sound_item gameMusic_chunk(int index) // game music
+
+    constexpr bn::sound_item title_chunks[] = { bn::sound_items::title_00, bn::sound_items::title_01, bn::sound_items::title_02, bn::sound_items::title_03, bn::sound_items::title_04 };
+    constexpr bn::sound_item game_chunks[]  = { bn::sound_items::game_00, bn::sound_items::game_01, bn::sound_items::game_02, bn::sound_items::game_03, bn::sound_items::game_04 };
+    constexpr bn::sound_item house_chunks[] = { bn::sound_items::house_00, bn::sound_items::house_01,bn::sound_items::house_02,bn::sound_items::house_03,bn::sound_items::house_04,bn::sound_items::house_05,bn::sound_items::house_06};
+
+    constexpr MusicTrack title_track = make_track(title_chunks);
+    constexpr MusicTrack game_track  = make_track(game_chunks);
+    constexpr MusicTrack house_track = make_track(house_chunks);
+
+    struct MusicPlayer
     {
-        switch(index){
-            case 0: return bn::sound_items::game_00;
-            case 1: return bn::sound_items::game_01;
-            case 2: return bn::sound_items::game_02;
-            case 3: return bn::sound_items::game_03;
-            default: return bn::sound_items::game_04;
+        const MusicTrack* track = nullptr;
+        int chunk = 0;
+        bn::optional<bn::sound_handle> handle;
+
+        void play(const MusicTrack& new_track)
+        {
+            if(track == &new_track) { return; }      // already playing it: two maps can share a song without a restart
+            stop();
+            track = &new_track;
+            chunk = 0;
+            handle = track->chunks[0].play(track->volume);
+        }
+
+        void update()                                // call once per frame
+        {
+            if(track && handle && !handle->active())
+            {
+                chunk = (chunk + 1) % track->count;
+                handle = track->chunks[chunk].play(track->volume);
+            }
+        }
+
+        void stop()
+        {
+            if(handle) { handle->stop(); handle.reset(); }
+            track = nullptr;
+        }
+    };
+    void sfx(int id){
+        switch (id){
+            case 1:
+                bn::sound_items::pick.play();
+                break;
+            case 2:
+                bn::sound_items::pick2.play();
+                break;
+            default:
+                bn::sound_items::meow.play();
+                break;
         }
     }
 
@@ -165,6 +209,16 @@ namespace
             case MAP_HOUSE:  return "Home";
             case MAP_WORLD2: return "Second World";
             default:         return "Grassy Plains";
+        }
+    }
+    const MusicTrack& map_music(int id)
+    {
+        switch(id)
+        {
+            case MAP_WORLD:  return game_track;      // later: return house_track;
+            case MAP_WORLD2: return game_track;
+            case MAP_HOUSE: return house_track;
+            default:         return game_track;
         }
     }
 
@@ -340,7 +394,7 @@ namespace
         int start_node;                      // the node a conversation begins with (nodes can change it later)
     };
 
-    // ---- Snep's dialogue ----
+    // ---- DIALOGUES ----
     // Give every node a name here so the tables below stay readable. The ORDER must match snep_nodes[].
     enum SnepNode
     {
@@ -894,23 +948,27 @@ namespace
         {
             if(bn::keypad::left_pressed() && c.choice > 0)
             {
+                sfx(2);
                 --c.choice;
                 draw_choices(c, text);
             }
             else if(bn::keypad::right_pressed() && c.choice < node.choice_count - 1)
             {
+                sfx(2);
                 ++c.choice;
                 draw_choices(c, text);
             }
 
             if(bn::keypad::a_pressed())
             {
+                sfx(1);
                 next = node.choices[c.choice].next;
                 advance = true;
             }
         }
         else if(bn::keypad::a_pressed())
         {
+            sfx(1);
             advance = true;
         }
 
@@ -963,8 +1021,9 @@ namespace
         int frame = 0;
 
         // if the music chunk finishes, another will play (wow)
-        int chunk = 0;
-        bn::sound_handle music = music_chunk(chunk).play();
+        // int chunk = 0;
+        // bn::sound_handle music = music_chunk(chunk).play();
+        MusicPlayer music; music.play(title_track);
 
         while(!bn::keypad::start_pressed())
         {
@@ -981,15 +1040,17 @@ namespace
             mountains.set_x(-camera * mountains_speed);
             hills.set_x(-camera * hills_speed);
             forest.set_x(-camera);
-            if(!music.active())   // this chunk finished, so start the next one
-            {
-                chunk = (chunk + 1) % music_chunks;
-                music = music_chunk(chunk).play();
-            }
+            // if(!music.active())   // this chunk finished, so start the next one
+            // {
+            //     chunk = (chunk + 1) % music_chunks;
+            //     music = music_chunk(chunk).play();
+            // }
+            music.update();
 
             bn::core::update();
         }
         music.stop();
+        sfx(1);
         // everything gets destroyed in this bounds
     }
 
@@ -1010,8 +1071,10 @@ namespace
         text.set_center_alignment();
         text.generate(-65,70, map_name(current_map), text_sprites);
 
-        int chunk = 0;
-        bn::sound_handle music = gameMusic_chunk(chunk).play();
+        // int chunk = 0;
+        // bn::sound_handle music = gameMusic_chunk(chunk).play();
+        MusicPlayer music;
+        music.play(map_music(current_map));
         // bn::sprite_ptr player = bn::sprite_items::player.create_sprite(0, -40);
         // bn::fixed vy = 0;
         // const bn::fixed gravity = 0.15;
@@ -1031,6 +1094,7 @@ namespace
         spawn_npcs(npcs, current_map, x.integer(), y.integer());
 
         Conversation talk;                    // the dialogue box: who we talk to, which node, which answer is picked
+        static phone::Phone phone_ui;     // static: it is big, so it lives in normal memory, not on the small stack
 
         // screen transition state
         bn::vector<bn::sprite_ptr, 12> blocks;   // the black block
@@ -1042,14 +1106,26 @@ namespace
         // DEBUGGING THE TEXT BOX
         // bn::vector<bn::sprite_ptr, 8> test_sprites;
         // text.generate(0, -40, "TEST", test_sprites);
+
         while(true)
         {
-            if(bn::keypad::start_pressed())
+                        // ---- the phone: L opens it, and the world freezes while it is open ----
+            if(phone_ui.active())
+            {
+                phone_ui.update(text);
+            }
+            else if(bn::keypad::l_pressed() && !paused && trans_phase == 0 && !talk.active())
+            {
+                phone_ui.open(text);
+            }
+            
+            if(bn::keypad::start_pressed() && !phone_ui.active())
             {
                 paused = !paused;
 
                 if(paused)
                 {
+                    sfx(5);
                     text.generate(0, 0, "PAUSED", pause_text_sprites);
                 }
                 else
@@ -1057,7 +1133,7 @@ namespace
                     pause_text_sprites.clear();
                 }
             }
-            if (!paused)
+            if (!paused && !phone_ui.active())
             {
                 bn::fixed dx = 0;
                 bn::fixed dy = 0;
@@ -1121,6 +1197,7 @@ namespace
                 }
                 else if(trans_phase == 0 && bn::keypad::a_pressed())
                 {
+                    sfx(1);
                     Npc* target = npc_in_reach(npcs, x.integer(), y.integer());   // nearest NPC within reach
                     if(target)
                     {
@@ -1173,6 +1250,7 @@ namespace
 
                         end_conversation(talk);                       // (safety) never keep pointing at an NPC that is about to vanish
                         spawn_npcs(npcs, current_map, x.integer(), y.integer());   // old NPCs are stored + freed, new ones created, followers tag along
+                        music.play(map_music(current_map));
 
                         text_sprites.clear();                         // update the name in the corner
                         text.generate(-65,70, map_name(current_map), text_sprites);
@@ -1215,11 +1293,12 @@ namespace
                 waffle.set_z_order(-y.integer());
             }
 
-            if(!music.active())   // this chunk finished, so start the next one
-            {
-                chunk = (chunk + 1) % music_chunks;
-                music = gameMusic_chunk(chunk).play();
-            }
+            // if(!music.active())   // this chunk finished, so start the next one
+            // {
+            //     chunk = (chunk + 1) % music_chunks;
+            //     music = gameMusic_chunk(chunk).play();
+            // }
+            music.update();
             bn::core::update();
         }
         music.stop();
