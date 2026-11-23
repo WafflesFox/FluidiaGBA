@@ -1,0 +1,1113 @@
+#ifndef BATTLE_LOGIC_H
+#define BATTLE_LOGIC_H
+// THE RULES OF THE BATTLE (plain C++: nothing from Butano in here, so it can be tested on a PC)
+//
+//   A = normal attacks (jab, smashes, aerials)      B = special attacks (water gun, aqua jets, fox thief)
+//   D-PAD + A or B picks the move.  R = jump.  L = shield.
+//
+// HOW MOVES WORK: a move is just DATA (see battle_moves.h). It is a little timeline, counted in frames
+// from the moment the button is pressed. On that timeline a move can have:
+//   - hitboxes     (melee: slaps, kicks, tail slams...)         -> Hitbox
+//   - a drive      (the fighter flies: aqua jet)                -> Drive
+//   - a shot       (something that flies away: water gun)       -> Shot
+//   - an absorb    (catches enemy shots: fox thief)
+// Nothing in this file knows what a "tail slam" is. To add a move you only write data.
+
+namespace battle
+{
+
+    constexpr int FP = 16;
+    constexpr int fp(double pixels) { return int(pixels * FP); }     // fp(1.5) = 1.5 pixels, as a fixed value
+
+    // ---- tuning that applies to every fighter ----
+    constexpr int SHIELD_MAX = 1000;            // a full shield
+    constexpr int SHIELD_DRAIN = 4;             // lost every frame the shield is held (250 frames = about 4 seconds)
+    constexpr int SHIELD_REGEN = 2;             // regained every frame it is not held (500 frames = about 8 seconds)
+    constexpr int SHIELD_REACTIVATE = 250;      // once it BREAKS (hits 0) it works again after refilling this much
+    constexpr int SHIELD_MAX_REDUCTION = 80;    // percent of damage removed by a FULL shield. Never 100: you still take chip damage.
+    constexpr int SHIELD_HIT_COST = 10;         // shield lost per point of damage taken while guarding
+    constexpr int SHIELD_PUSH = 3;              // a blocked hit pushes the guard back by (its knockback / this)
+    constexpr int HURT_FRAMES = 10;             // flinch length when a hit does not say how long it stuns
+    constexpr int DROP_FRAMES = 12;             // how long you fall through a platform
+    constexpr int DROP_HOLD = 6;                // ...after holding DOWN this many frames (a quick DOWN + A/B is a down move instead)
+    constexpr int BODY_MARGIN = 8;              // how close to the edge of the stage a fighter can stand
+    constexpr int TIME_LIMIT = 60 * 90;         // 90 seconds, then whoever has more HP wins
+    constexpr int KB_HP_BONUS = 60;             // KNOCKBACK: hits send you this many % further when you are almost dead
+    constexpr int DRIVE_EXIT_PERCENT = 25;      // speed that is kept when a dash ends (the rest is thrown away so you don't keep sliding)
+    constexpr int ABSORB_MARGIN = 6;            // fox thief catches shots this many pixels outside the body too
+    constexpr int MAX_PROJECTILES = 8;
+    constexpr int MAX_PLATFORMS = 6;
+    constexpr int MAX_HITBOXES = 4;             // per move (raise it if a move needs more)
+    constexpr int MAX_EFFECTS = 4;              // hit sparks on screen at once
+
+    // ============================================================================================
+    // DATA: what a move is, what a fighter is, what a stage is
+    // ============================================================================================
+
+    enum { PROJ_WATER = 0, PROJ_EXPLOSION };    // which picture a shot uses (battle.h turns this into a sprite)
+    enum { FX_SPARK = 0 };                      // little effects (only the hit spark for now)
+
+    // Which pose to show during a move. You have no attack sprites yet, so battle.h shows stand-in frames.
+    // When you draw real ones, only pick_frame() in battle.h needs to change.
+    enum
+    {
+        ANIM_STAND, ANIM_SLAP, ANIM_TAIL, ANIM_TAIL_UP, ANIM_KICK, ANIM_SPIN, ANIM_SLAM,
+        ANIM_SHOOT, ANIM_JET_SIDE, ANIM_JET_UP, ANIM_JET_DOWN, ANIM_STANCE,
+    };
+
+    // Every button + direction combination is a SLOT. A fighter's MoveSet says which move sits in each slot.
+    //   B alone / B + left-right / B + up / B + down        A on the ground                      A in the air
+    enum Slot
+    {
+        SLOT_SPECIAL, SLOT_SPECIAL_SIDE, SLOT_SPECIAL_UP, SLOT_SPECIAL_DOWN,
+        SLOT_JAB, SLOT_FSMASH, SLOT_USMASH, SLOT_DSMASH,
+        SLOT_NAIR, SLOT_FAIR, SLOT_BAIR, SLOT_UAIR, SLOT_DAIR,
+        SLOT_COUNT
+    };
+
+    enum : unsigned
+    {
+        MF_AIR_ONCE     = 1u << 0,      // can only be used once per jump (so up-specials can't be chained to fly away)
+        MF_FIRE_ON_LAND = 1u << 1,      // the move's shot is fired when the fighter touches the ground (the dair explosion)
+        MF_USE_STORED   = 1u << 2,      // the move's shot is the one fox thief stole, not its own
+    };
+
+    // A melee hit. Every hitbox of a move can hit the opponent ONCE per use of the move.
+    // Everything is set with the chained helpers, so a move reads like a sentence (see battle_moves.h):
+    //     Hitbox().frames(4, 8).at(16, 14).size(16, 12).dmg(2).launch(fp(0.4), 0).stun(14)
+    struct Hitbox
+    {
+        int start = 0, end = 0;     // active on frames start .. end-1 of the move (frame 0 = right after the button press)
+        int x = 0, y = 0;           // the middle of the box: x = pixels IN FRONT of the fighter (negative = behind),
+                                    //                        y = pixels above the feet
+        int w = 10, h = 10;         // size in pixels
+        int damage = 1;
+        int kb_x = 0, kb_y = 0;     // launch speed (fp). kb_x pushes AWAY from the attacker. kb_y: negative = up, positive = down
+        int hitstun = 0;            // frames the victim can't act (0 = HURT_FRAMES)
+
+        constexpr Hitbox frames(int s, int e) const { Hitbox b = *this; b.start = s; b.end = e; return b; }
+        constexpr Hitbox at(int px, int py) const   { Hitbox b = *this; b.x = px; b.y = py; return b; }
+        constexpr Hitbox size(int pw, int ph) const { Hitbox b = *this; b.w = pw; b.h = ph; return b; }
+        constexpr Hitbox dmg(int d) const           { Hitbox b = *this; b.damage = d; return b; }
+        constexpr Hitbox launch(int kx, int ky) const { Hitbox b = *this; b.kb_x = kx; b.kb_y = ky; return b; }
+        constexpr Hitbox stun(int frames_) const    { Hitbox b = *this; b.hitstun = frames_; return b; }
+    };
+
+    // Something that flies away (or just appears and stays, like an explosion).
+    struct Shot
+    {
+        int kind = PROJ_WATER;      // PROJ_...
+        int damage = 1;
+        int speed = 0;              // fp per frame (0 = stays where it appears)
+        int life = 30;              // frames before it disappears (speed x life = range)
+        int w = 8, h = 8;           // hitbox size in pixels
+        int dx = 0, dy = 0;         // where it appears: pixels in front of the fighter's middle / above the feet
+        int kb_x = 0, kb_y = 0;     // launch, same as Hitbox
+        int hitstun = 0;
+        bool absorbable = true;     // fox thief can steal it
+        bool persist = false;       // stays around after it hit (explosions); it still only hits once
+
+        constexpr Shot of(int k) const              { Shot s = *this; s.kind = k; return s; }
+        constexpr Shot dmg(int d) const             { Shot s = *this; s.damage = d; return s; }
+        constexpr Shot fly(int speed_fp, int frames_) const { Shot s = *this; s.speed = speed_fp; s.life = frames_; return s; }
+        constexpr Shot size(int pw, int ph) const   { Shot s = *this; s.w = pw; s.h = ph; return s; }
+        constexpr Shot spawn(int pdx, int pdy) const { Shot s = *this; s.dx = pdx; s.dy = pdy; return s; }
+        constexpr Shot launch(int kx, int ky) const { Shot s = *this; s.kb_x = kx; s.kb_y = ky; return s; }
+        constexpr Shot stun(int frames_) const      { Shot s = *this; s.hitstun = frames_; return s; }
+        constexpr Shot steal_proof() const          { Shot s = *this; s.absorbable = false; return s; }
+        constexpr Shot lingers() const              { Shot s = *this; s.persist = true; return s; }
+    };
+
+    // The fighter FLIES for a while: gravity is off and the speed is forced (aqua jet).
+    struct Drive
+    {
+        int start = 0, end = 0;     // active on frames start .. end-1 (end <= start = no drive)
+        int vx = 0, vy = 0;         // fp per frame. vx points where the fighter faces. vy: negative = up
+        int homing = 0;             // 0..100: how much it steers up/down toward the opponent (only if they are in front)
+        bool stop_on_hit = false;   // the dash ends the moment it hits something
+
+        constexpr Drive frames(int s, int e) const  { Drive d = *this; d.start = s; d.end = e; return d; }
+        constexpr Drive speed(int sx, int sy) const { Drive d = *this; d.vx = sx; d.vy = sy; return d; }
+        constexpr Drive steer(int percent) const    { Drive d = *this; d.homing = percent; return d; }
+        constexpr Drive stops_on_hit() const        { Drive d = *this; d.stop_on_hit = true; return d; }
+    };
+
+    // A whole move.   Move("name", total frames, pose).hit(...).hit(...).dash(...)...
+    struct Move
+    {
+        const char* name = "";
+        int duration = 20;          // total length in frames, recovery included
+        int anim = ANIM_STAND;
+        unsigned flags = 0;         // MF_...
+        Hitbox hits[MAX_HITBOXES] = {};
+        int hit_count = 0;
+        Drive drive = {};
+        int shot_frame = -1;        // the frame the shot is fired (-1 = this move fires nothing at a set time)
+        Shot shot = {};
+        int land_frame = 0;         // MF_FIRE_ON_LAND: the move jumps to this frame when it lands (so only the recovery is left)
+        int absorb_start = 0, absorb_end = 0;   // frames where enemy shots that touch the fighter are stolen
+        int power = 100;            // MF_USE_STORED: % of the stolen shot's damage and speed
+        const Move* alt = nullptr;  // used INSTEAD of this move while the fighter is holding a stolen shot
+
+        constexpr Move() = default;
+        constexpr Move(const char* n, int total_frames, int pose) : name(n), duration(total_frames), anim(pose) {}
+
+        constexpr Move hit(const Hitbox& h) const
+        {
+            Move m = *this;
+            m.hits[m.hit_count] = h;            // (more than MAX_HITBOXES = a compile error: raise MAX_HITBOXES)
+            ++m.hit_count;
+            return m;
+        }
+        constexpr Move dash(const Drive& d) const { Move m = *this; m.drive = d; return m; }
+        constexpr Move fires(int frame, const Shot& s) const { Move m = *this; m.shot_frame = frame; m.shot = s; return m; }
+        constexpr Move fires_on_landing(const Shot& s, int frame_after_landing) const
+        {
+            Move m = *this; m.shot = s; m.land_frame = frame_after_landing; m.flags |= MF_FIRE_ON_LAND; return m;
+        }
+        constexpr Move throws_stored(int frame, int power_percent) const
+        {
+            Move m = *this; m.shot_frame = frame; m.power = power_percent; m.flags |= MF_USE_STORED; return m;
+        }
+        constexpr Move absorbs(int s, int e) const { Move m = *this; m.absorb_start = s; m.absorb_end = e; return m; }
+        constexpr Move swaps_when_holding(const Move* other) const { Move m = *this; m.alt = other; return m; }
+        constexpr Move once_per_jump() const { Move m = *this; m.flags |= MF_AIR_ONCE; return m; }
+    };
+
+    // Which move sits in which slot. nullptr = this fighter simply has no such move.
+    struct MoveSet
+    {
+        const Move* slot[SLOT_COUNT] = {};
+
+        constexpr MoveSet set(int which, const Move* m) const
+        {
+            MoveSet s = *this;
+            s.slot[which] = m;
+            return s;
+        }
+    };
+
+    struct FighterStats
+    {
+        int max_hp;
+        int walk_speed;         // fp per frame
+        int ground_accel;       // fp per frame, how fast you reach full speed
+        int air_accel;
+        int friction;           // fp per frame, how fast you stop on the ground
+        int jump_power;         // fp: the speed you leave the ground with
+        int double_jump_power;
+        int max_jumps;          // 2 = one jump + one in the air
+        int gravity;            // fp per frame
+        int max_fall;           // fp
+        int fast_fall;          // fp, the fall speed while holding DOWN
+        int body_w, body_h;     // hurtbox in pixels (feet at the bottom middle)
+        int defense;            // percent of damage ALWAYS removed (0 = none)
+        int ai_skill;           // 0..100: how well the computer plays this fighter
+        const MoveSet* moves;   // every move this fighter knows (see battle_moves.h)
+        int weight = 100;       // 100 = normal. Heavier fighters (150) get launched less, lighter ones (70) more
+    };
+
+    struct Platform
+    {
+        int x, y, w;            // x = left edge, y = the surface you stand on, w = width, in pixels
+    };
+
+    struct StageGeom
+    {
+        int length;             // how wide the stage is, in pixels (240 = exactly one screen, no scrolling)
+        int ground_y;           // y of the floor surface
+        const Platform* platforms;
+        int platform_count;
+        int spawn_player;       // x where the player starts (0 = automatic)
+        int spawn_enemy;
+    };
+
+    // ============================================================================================
+    // THE FIGHT
+    // ============================================================================================
+
+    enum State { ST_IDLE, ST_WALK, ST_AIR, ST_ATTACK, ST_SHIELD, ST_HURT, ST_KO };
+
+    // what a fighter "pressed" this frame (the player's buttons, or the computer's decision)
+    struct Input
+    {
+        int move = 0;           // -1 left, 0 nothing, +1 right (held)
+        bool up = false;        // held
+        bool down = false;      // held
+        bool jump = false;      // pressed this frame
+        bool attack = false;    // A pressed this frame
+        bool special = false;   // B pressed this frame
+        bool shield = false;    // held
+    };
+
+    struct Fighter
+    {
+        const FighterStats* stats = nullptr;
+        int x16 = 0, y16 = 0;       // the middle of the feet
+        int vx = 0, vy = 0;
+        int facing = 1;             // +1 right, -1 left
+        bool on_ground = false;
+        int support = -1;           // what you stand on: -1 = the floor, otherwise the platform's number
+        int jumps_left = 0;
+        int hp = 0;
+        int shield = SHIELD_MAX;
+        bool shield_locked = false; // the shield broke and is still recharging
+        int state = ST_AIR;
+        int timer = 0;              // frames left of a flinch
+        int drop_timer = 0;
+        int down_hold = 0;          // how long DOWN has been held on a platform
+
+        // the move being performed (only while state == ST_ATTACK)
+        const Move* move = nullptr;
+        int move_frame = 0;         // frames since the move began
+        unsigned hit_done = 0;      // bit k set = hitbox k already hit
+        bool driving = false;       // flying right now (aqua jet)
+        bool drive_cut = false;     // the dash was ended early (it hit, or it landed)
+        bool land_fired = false;
+        unsigned air_used = 0;      // bit per slot: used in this jump already (MF_AIR_ONCE)
+
+        // fox thief
+        bool has_stored = false;
+        Shot stored = {};
+    };
+
+    struct Projectile
+    {
+        bool active = false;
+        int id = 0;
+        int owner = 0;
+        int x16 = 0, y16 = 0;       // the middle of it
+        int vx = 0;
+        int age = 0;
+        int life = 0;
+        bool hit_done = false;
+        Shot shot = {};
+    };
+
+    // little pictures that play once (hit sparks). battle.h draws them.
+    struct Effect
+    {
+        bool active = false;
+        int kind = 0;
+        int x16 = 0, y16 = 0;
+        int age = 0;
+        int life = 1;
+    };
+
+    // things that happened this frame, so battle.h can play sounds
+    struct Events
+    {
+        bool shot = false;          // something was fired / thrown
+        bool swing = false;         // a melee move started
+        bool dash = false;          // an aqua jet took off
+        bool absorb = false;        // fox thief stole a shot
+        bool boom = false;          // the dair explosion
+        bool hit = false;
+        bool blocked = false;       // a hit that landed on a shield
+        bool jump = false;
+        bool ko = false;
+    };
+
+    // The computer's memory
+    struct Ai
+    {
+        int handled_projectile = -1;    // the last incoming shot it already made a decision about
+        int absorb_handled = -1;
+        int shield_hold = 0;
+        int drop_hold = 0;
+        int strafe = 0;
+        int strafe_timer = 0;
+        int mode_timer = 0;
+        int last_react = -1000;         // the frame it last decided whether to guard against a melee move
+        bool rush = false;              // true = walks up and fights close, false = keeps its distance and shoots
+    };
+
+    struct Rect { int x, y, w, h; };    // a box: x and y are its MIDDLE, in pixels
+
+    inline int abs_i(int v) { return v < 0 ? -v : v; }
+    inline int sign_i(int v) { return v < 0 ? -1 : (v > 0 ? 1 : 0); }
+
+    inline bool overlaps(const Rect& a, const Rect& b)
+    {
+        return abs_i(a.x - b.x) * 2 < a.w + b.w && abs_i(a.y - b.y) * 2 < a.h + b.h;
+    }
+
+    inline bool has_move(const FighterStats& s, int which) { return s.moves != nullptr && s.moves->slot[which] != nullptr; }
+
+    struct Fight
+    {
+        StageGeom stage = {};
+        Fighter f[2];               // f[0] = the player, f[1] = the opponent
+        Projectile proj[MAX_PROJECTILES];
+        Effect fx[MAX_EFFECTS];
+        Ai ai[2];
+        Events ev;
+        unsigned rng = 1;
+        int frame = 0;
+        int winner = -1;            // -1 = still fighting, 0 = the player won, 1 = the opponent won
+        int next_projectile_id = 0;
+
+        void start(const StageGeom& geometry, const FighterStats& player, const FighterStats& enemy, unsigned seed)
+        {
+            stage = geometry;
+            rng = seed * 2654435761u + 977u;
+            if(rng == 0) { rng = 1; }
+            frame = 0;
+            winner = -1;
+            next_projectile_id = 0;
+            for(Projectile& p : proj) { p = Projectile(); }
+            for(Effect& e : fx) { e = Effect(); }
+            ai[0] = Ai();
+            ai[1] = Ai();
+
+            const FighterStats* stats[2] = { &player, &enemy };
+            const int spawn[2] =
+            {
+                geometry.spawn_player > 0 ? geometry.spawn_player : geometry.length * 3 / 10,
+                geometry.spawn_enemy > 0 ? geometry.spawn_enemy : geometry.length * 7 / 10,
+            };
+
+            for(int i = 0; i < 2; ++i)
+            {
+                f[i] = Fighter();
+                f[i].stats = stats[i];
+                f[i].x16 = spawn[i] * FP;
+                f[i].y16 = geometry.ground_y * FP;
+                f[i].on_ground = true;
+                f[i].hp = stats[i]->max_hp;
+                f[i].jumps_left = stats[i]->max_jumps;
+                f[i].facing = i == 0 ? 1 : -1;
+                f[i].state = ST_IDLE;
+            }
+        }
+
+        // Advance the fight by one frame. in[0] = the player's input, in[1] = the opponent's.
+        void step(const Input* in)
+        {
+            ev = Events();
+
+            for(int i = 0; i < 2; ++i) { update_fighter(i, in[i]); }    // movement, starting moves, flying, firing
+            resolve_melee();                                            // did any hitbox touch anybody?
+            for(int i = 0; i < 2; ++i) { advance_move(i); }             // the move's clock ticks
+            update_projectiles();
+            for(Effect& e : fx) { if(e.active && ++e.age >= e.life) { e.active = false; } }
+            ++frame;
+
+            if(winner < 0)
+            {
+                if(f[0].hp <= 0)      { winner = 1; }              // (if both fall on the same frame, the player loses)
+                else if(f[1].hp <= 0) { winner = 0; }
+                else if(frame >= TIME_LIMIT) { winner = f[0].hp > f[1].hp ? 0 : 1; }
+            }
+        }
+
+        // Which slot do these buttons mean?  (public: the computer and the tests use it too)
+        static int pick_slot(const Input& in, const Fighter& p)
+        {
+            const bool up = in.up && !in.down;
+            const bool down = in.down && !in.up;
+
+            if(in.special)                                  // B: the specials, the same on the ground and in the air
+            {
+                if(up)           { return SLOT_SPECIAL_UP; }
+                if(down)         { return SLOT_SPECIAL_DOWN; }
+                if(in.move != 0) { return SLOT_SPECIAL_SIDE; }
+                return SLOT_SPECIAL;
+            }
+
+            if(p.on_ground)                                 // A on the ground: jab and smashes
+            {
+                if(up)           { return SLOT_USMASH; }
+                if(down)         { return SLOT_DSMASH; }
+                if(in.move != 0) { return SLOT_FSMASH; }
+                return SLOT_JAB;
+            }
+
+            if(up)               { return SLOT_UAIR; }      // A in the air: aerials ("forward" and "back" depend on where you face)
+            if(down)             { return SLOT_DAIR; }
+            if(in.move != 0)     { return in.move == p.facing ? SLOT_FAIR : SLOT_BAIR; }
+            return SLOT_NAIR;
+        }
+
+        // is hitbox k of fighter i's move active RIGHT NOW? (battle.h uses it to draw the swipes)
+        bool hitbox_now(int i, int k, Rect& out) const
+        {
+            const Fighter& p = f[i];
+            if(p.state != ST_ATTACK || !p.move || k >= p.move->hit_count) { return false; }
+            const Hitbox& h = p.move->hits[k];
+            if(p.move_frame < h.start || p.move_frame >= h.end) { return false; }
+            out = Rect{ p.x16 / FP + p.facing * h.x, p.y16 / FP - h.y, h.w, h.h };
+            return true;
+        }
+
+        // The computer decides what to press. Use the result as in[1] (or in[0] to let it play for you).
+        Input think(int self)
+        {
+            Input in;
+            const Fighter& me = f[self];
+            const Fighter& op = f[1 - self];
+            Ai& brain = ai[self];
+            if(winner >= 0 || me.state == ST_KO) { return in; }
+
+            const FighterStats& s = *me.stats;
+            const int dx = (op.x16 - me.x16) / FP;            // + = the opponent is on my right
+            const int dy = (op.y16 - me.y16) / FP;            // + = the opponent is below me
+            const int adx = abs_i(dx);
+            const int ady = abs_i(dy);
+            const int toward = dx > 0 ? 1 : -1;
+            const bool can_act = me.state == ST_IDLE || me.state == ST_WALK || me.state == ST_AIR;
+
+            // falling through a platform means holding DOWN for a few frames
+            if(brain.drop_hold > 0) { --brain.drop_hold; in.down = true; return in; }
+
+            // 1. is a shot coming at me? decide ONCE per shot whether to react (the better the skill, the more often)
+            const Projectile* threat = nullptr;
+            int threat_dist = 9999;
+            const int my_mid_y = me.y16 - (s.body_h * FP) / 2;
+            for(const Projectile& p : proj)
+            {
+                if(!p.active || p.owner == self || p.vx == 0) { continue; }
+                const int pdx = (p.x16 - me.x16) / FP;
+                const bool coming = (pdx > 0 && p.vx < 0) || (pdx < 0 && p.vx > 0);
+                const int pdy = abs_i((p.y16 - my_mid_y) / FP);
+                if(coming && abs_i(pdx) < 100 && pdy < s.body_h / 2 + p.shot.h / 2 + 4 && abs_i(pdx) < threat_dist)
+                {
+                    threat = &p;
+                    threat_dist = abs_i(pdx);
+                }
+            }
+
+            // 1a. fox thief: steal the shot right as it arrives (it takes a few frames to get ready)
+            if(threat && threat_dist < 76 && threat->id != brain.absorb_handled)
+            {
+                brain.absorb_handled = threat->id;
+                if(can_act && !me.has_stored && threat->shot.absorbable && has_move(s, SLOT_SPECIAL_DOWN) && random_below(100) < s.ai_skill / 2)
+                {
+                    brain.handled_projectile = threat->id;
+                    in.special = true;
+                    in.down = true;
+                    return in;
+                }
+            }
+
+            // 1b. otherwise guard or jump over it
+            if(threat && threat->id != brain.handled_projectile)
+            {
+                brain.handled_projectile = threat->id;
+                if(me.on_ground && random_below(100) < s.ai_skill)       { brain.shield_hold = 18 + random_below(10); }
+                else if(me.jumps_left > 0 && random_below(100) < 45)     { in.jump = true; }
+            }
+            if(brain.shield_hold > 0)
+            {
+                --brain.shield_hold;
+                in.shield = true;
+                return in;                                                // while guarding, do nothing else
+            }
+
+            // 1c. is the opponent swinging at me? (decided once per swing, so a better player guards more often)
+            if(me.on_ground && can_act && op.state == ST_ATTACK && op.move && op.move->hit_count > 0 && adx < 46 && ady < 34 &&
+               frame - brain.last_react > 25)
+            {
+                brain.last_react = frame;
+                if(random_below(100) < s.ai_skill / 2) { brain.shield_hold = 14 + random_below(12); }
+            }
+            if(brain.shield_hold > 0)
+            {
+                --brain.shield_hold;
+                in.shield = true;
+                return in;
+            }
+
+            // 2. holding a stolen shot? throw it back
+            if(me.has_stored && can_act && has_move(s, SLOT_SPECIAL_DOWN) && ady < 26 && adx < 170 && random_below(100) < 6)
+            {
+                in.move = toward;
+                in.special = true;
+                in.down = true;
+                return in;
+            }
+
+            // 3. movement. Sometimes it keeps its distance and shoots, sometimes it rushes in and fights close
+            if(--brain.mode_timer <= 0)
+            {
+                brain.mode_timer = 90 + random_below(150);
+                brain.rush = random_below(100) < 30 + s.ai_skill / 3;
+            }
+            const int wanted_range = brain.rush ? 22 : 105;
+            if(--brain.strafe_timer <= 0)
+            {
+                brain.strafe_timer = 25 + random_below(50);
+                brain.strafe = random_below(3) - 1;
+            }
+            if(adx > wanted_range + 25)       { in.move = toward; }
+            else if(adx < wanted_range - 45)  { in.move = -toward; }
+            else                              { in.move = brain.strafe; }
+
+            // 4. attacks
+            if(can_act)
+            {
+                const bool grounded = me.on_ground;
+                const bool facing_op = me.facing == toward;
+                const int urge = 2 + s.ai_skill / 20 + (brain.rush ? 3 : 0);          // % chance per frame
+
+                if(adx < 34 && ady < 30)                                              // close: melee
+                {
+                    if(random_below(100) < urge + 4)
+                    {
+                        const int r = random_below(100);
+                        if(grounded)
+                        {
+                            // (a neutral press needs in.move = 0, or the direction the computer is walking turns it into a smash)
+                            if(r < 40)                                 { if(facing_op) { in.move = 0; in.attack = true; } else { in.move = toward; } }   // slap combo
+                            else if(r < 70)                            { in.move = toward; in.attack = true; }                                           // forward smash
+                            else if(r < 85)                            { in.down = true; in.attack = true; }                                             // down smash
+                            else                                       { if(facing_op) { in.move = 0; in.attack = true; } }
+                        }
+                        else
+                        {
+                            if(r < 40) { in.move = 0; in.attack = true; }                         // spin
+                            else       { in.move = toward; in.attack = true; }                     // kick (or tail slap if they are behind)
+                        }
+                    }
+                }
+                else if(dy < -26 && adx < 30)                                          // they are above me
+                {
+                    const int r = random_below(100);
+                    if(r < urge + 2)                                { in.up = true; in.attack = true; }                                     // up smash / up air
+                    else if(r < urge + 4 && has_move(s, SLOT_SPECIAL_UP)) { in.up = true; in.special = true; }                                 // aqua jet up
+                }
+                else if(!grounded && dy > 24 && adx < 22)                              // they are below me and I am in the air
+                {
+                    if(random_below(100) < urge + 4) { in.down = true; in.attack = true; }  // dair
+                }
+                else if(ady < 26)                                                      // roughly level: shoot or dash at them
+                {
+                    const Move* jet = s.moves ? s.moves->slot[SLOT_SPECIAL_SIDE] : nullptr;
+                    const Move* gun = s.moves ? s.moves->slot[SLOT_SPECIAL] : nullptr;
+                    const int jet_range = jet ? jet->drive.vx * (jet->drive.end - jet->drive.start) / FP + 12 : 0;
+                    const int gun_range = (gun && gun->shot_frame >= 0) ? gun->shot.speed * gun->shot.life / FP : 0;
+
+                    if(jet && adx > 40 && adx < jet_range && random_below(1000) < 6 + s.ai_skill / 10)
+                    {
+                        in.move = toward;                                              // aqua jet
+                        in.special = true;
+                    }
+                    else if(gun_range > 0 && adx > 40 && adx < gun_range && random_below(100) < 3 + s.ai_skill / 12)
+                    {
+                        if(facing_op) { in.move = 0; in.special = true; }             // water gun (needs to face them first)
+                        else          { in.move = toward; }
+                    }
+                }
+            }
+
+            // 5. get to a different height
+            if(!in.attack && !in.special)
+            {
+                if(me.on_ground && dy < -36 && random_below(100) < 5)                        { in.jump = true; }
+                else if(me.on_ground && me.support >= 0 && dy > 36 && random_below(100) < 4) { brain.drop_hold = DROP_HOLD + 2; in.down = true; }
+                else if(me.on_ground && random_below(1000) < 4)                              { in.jump = true; }
+            }
+            return in;
+        }
+
+    private:
+        struct PendingHit
+        {
+            int attacker;
+            int index;                  // which hitbox of the attacker's move
+            Hitbox box;                 // a copy, because the attacker's move can be cut short by the same frame's hits
+            int dir;                    // +1: the victim is launched to the right
+            int sx16, sy16;             // where the hit spark appears
+            bool stops_dash;
+        };
+
+        int random_below(int limit)
+        {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            return int(rng % unsigned(limit));
+        }
+
+        static int approach(int value, int target, int amount)
+        {
+            if(value < target) { value += amount; if(value > target) { value = target; } }
+            else if(value > target) { value -= amount; if(value < target) { value = target; } }
+            return value;
+        }
+
+        static Rect hurtbox_of(const Fighter& t)
+        {
+            return Rect{ t.x16 / FP, t.y16 / FP - t.stats->body_h / 2, t.stats->body_w, t.stats->body_h };
+        }
+
+        void update_fighter(int i, const Input& raw)
+        {
+            Fighter& p = f[i];
+            const FighterStats& s = *p.stats;
+            Input in = raw;
+            if(winner >= 0 || p.state == ST_KO) { in = Input(); }
+            if(p.drop_timer > 0) { --p.drop_timer; }
+
+            // ---- states that run by themselves ----
+            bool floating = false;                                        // true while an aqua jet is flying
+            if(p.state == ST_ATTACK)
+            {
+                if(p.move) { floating = run_move(i); }
+                else       { p.state = p.on_ground ? ST_IDLE : ST_AIR; }  // (safety: an attack without a move)
+            }
+            else if(p.state == ST_HURT)
+            {
+                if(--p.timer <= 0) { p.state = p.on_ground ? ST_IDLE : ST_AIR; }
+            }
+
+            // ---- states where the fighter is in control ----
+            const bool free_state = p.state == ST_IDLE || p.state == ST_WALK || p.state == ST_AIR || p.state == ST_SHIELD;
+            bool steering = false;
+
+            if(free_state)
+            {
+                bool started = false;
+                if((in.attack || in.special) && p.state != ST_SHIELD) { started = try_start_move(p, in); }
+
+                if(!started)
+                {
+                    if(in.move != 0) { p.facing = in.move; }
+
+                    if(in.jump && p.jumps_left > 0)                       // jumping also cancels the shield
+                    {
+                        p.vy = -(p.on_ground ? s.jump_power : s.double_jump_power);
+                        --p.jumps_left;
+                        p.on_ground = false;
+                        p.support = -1;
+                        p.state = ST_AIR;
+                        p.down_hold = 0;
+                        ev.jump = true;
+                    }
+                    else if(in.down && p.on_ground && p.support >= 0 && p.state != ST_SHIELD)
+                    {
+                        if(++p.down_hold >= DROP_HOLD)                    // DOWN has to be HELD: a quick DOWN + A/B is a down move
+                        {
+                            p.down_hold = 0;
+                            p.drop_timer = DROP_FRAMES;                   // fall through the platform
+                            p.on_ground = false;
+                            p.support = -1;
+                            p.state = ST_AIR;
+                        }
+                    }
+                    else { p.down_hold = 0; }
+
+                    const bool can_guard = p.on_ground && !p.shield_locked && p.shield > 0;
+                    if(in.shield && can_guard)            { p.state = ST_SHIELD; }
+                    else if(p.state == ST_SHIELD)         { p.state = ST_IDLE; }
+                }
+                steering = p.state != ST_SHIELD && p.state != ST_ATTACK;
+            }
+            else { p.down_hold = 0; }
+
+            // ---- the shield's energy: it drains while held, so its defense boost slowly drops ----
+            if(p.state == ST_SHIELD)
+            {
+                p.shield -= SHIELD_DRAIN;
+                if(p.shield <= 0)
+                {
+                    p.shield = 0;
+                    p.shield_locked = true;                               // broken: no guarding until it recharges
+                    p.state = ST_IDLE;
+                }
+            }
+            else
+            {
+                p.shield += SHIELD_REGEN;
+                if(p.shield > SHIELD_MAX) { p.shield = SHIELD_MAX; }
+                if(p.shield_locked && p.shield >= SHIELD_REACTIVATE) { p.shield_locked = false; }
+            }
+
+            // ---- sideways speed ----
+            if(steering)
+            {
+                const int target = in.move * s.walk_speed;
+                int accel = p.on_ground ? s.ground_accel : s.air_accel;
+                if(target == 0 && p.on_ground) { accel = s.friction; }
+                p.vx = approach(p.vx, target, accel);
+            }
+            else if(p.on_ground && !floating)
+            {
+                p.vx = approach(p.vx, 0, s.friction); // shielding, attacking, flinching: slide to a stop
+            }
+
+            integrate(p, in.down, floating);
+
+            // ---- a dive that touched the ground: boom, and only the recovery is left ----
+            if(p.state == ST_ATTACK && p.move && p.driving && p.on_ground && (p.move->flags & MF_FIRE_ON_LAND) && !p.land_fired)
+            {
+                p.land_fired = true;
+                p.drive_cut = true;
+                p.vx = 0;
+                spawn_shot(i, p.move->shot);
+                ev.boom = true;
+                if(p.move_frame < p.move->land_frame) { p.move_frame = p.move->land_frame; }
+            }
+
+            // ---- which of idle / walk / air are we? ----
+            if(p.state == ST_IDLE || p.state == ST_WALK || p.state == ST_AIR)
+            {
+                if(!p.on_ground)                              { p.state = ST_AIR; }
+                else if(in.move != 0 && p.vx != 0)            { p.state = ST_WALK; }
+                else                                          { p.state = ST_IDLE; }
+            }
+        }
+
+        // The buttons asked for a move. Returns false if this fighter has no move there (or can't use it now).
+        bool try_start_move(Fighter& p, const Input& in)
+        {
+            const FighterStats& s = *p.stats;
+            if(!s.moves) { return false; }
+
+            const int slot = pick_slot(in, p);
+            const Move* m = s.moves->slot[slot];
+            if(!m) { return false; }
+            if(m->alt && p.has_stored) { m = m->alt; }                    // holding a stolen shot: fox thief becomes the throw
+            if((m->flags & MF_AIR_ONCE) && !p.on_ground && (p.air_used & (1u << slot))) { return false; }
+
+            // you turn toward the direction you press, except for aerials: those are "forward" and "back" of where you face
+            const bool aerial = in.attack && !in.special && !p.on_ground;
+            if(in.move != 0 && !aerial) { p.facing = in.move; }
+
+            p.state = ST_ATTACK;
+            p.move = m;
+            p.move_frame = 0;
+            p.hit_done = 0;
+            p.driving = false;
+            p.drive_cut = false;
+            p.land_fired = false;
+            p.down_hold = 0;
+            if(!p.on_ground && (m->flags & MF_AIR_ONCE)) { p.air_used |= 1u << slot; }
+            if(m->hit_count > 0 || m->drive.end > m->drive.start) { ev.swing = true; }
+            return true;
+        }
+
+        // Runs frame `move_frame` of the fighter's move: flying and firing. Returns true while gravity must stay off.
+        bool run_move(int i)
+        {
+            Fighter& p = f[i];
+            const Move& m = *p.move;
+            const int t = p.move_frame;
+            bool floating = false;
+
+            const Drive& d = m.drive;
+            if(d.end > d.start && t >= d.start && t < d.end && !p.drive_cut)
+            {
+                p.vx = p.facing * d.vx;
+                p.vy = d.vy;
+
+                if(d.homing > 0)                                          // steer up or down toward the opponent (if they are ahead)
+                {
+                    const Fighter& op = f[1 - i];
+                    if((op.x16 - p.x16) * p.facing > 0)
+                    {
+                        const int want = (op.y16 - (op.stats->body_h * FP) / 2) - (p.y16 - (p.stats->body_h * FP) / 2);
+                        const int limit = abs_i(d.vx) * d.homing / 100;
+                        p.vy = want > limit ? limit : (want < -limit ? -limit : want);
+                    }
+                }
+
+                if(t == d.start) { ev.dash = true; }
+                p.driving = true;
+                floating = true;
+            }
+            else if(p.driving)                                            // the dash just ended: throw most of its speed away
+            {
+                p.driving = false;
+                p.vx = p.vx * DRIVE_EXIT_PERCENT / 100;
+                p.vy = p.vy * DRIVE_EXIT_PERCENT / 100;
+            }
+
+            if(m.shot_frame >= 0 && t == m.shot_frame)
+            {
+                if(m.flags & MF_USE_STORED) { if(p.has_stored) { throw_stored(i, m.power); } }
+                else                        { spawn_shot(i, m.shot); ev.shot = true; }
+            }
+            return floating;
+        }
+
+        void advance_move(int i)
+        {
+            Fighter& p = f[i];
+            if(p.state != ST_ATTACK || !p.move) { return; }
+            if(++p.move_frame >= p.move->duration)
+            {
+                if(p.driving) { p.vx = p.vx * DRIVE_EXIT_PERCENT / 100; p.vy = p.vy * DRIVE_EXIT_PERCENT / 100; }
+                p.driving = false;
+                p.move = nullptr;
+                p.state = p.on_ground ? ST_IDLE : ST_AIR;
+            }
+        }
+
+        // gravity, movement, walls, and landing on the floor or a platform
+        void integrate(Fighter& p, bool holding_down, bool floating)
+        {
+            const FighterStats& s = *p.stats;
+
+            if(!floating)                                                 // (an aqua jet ignores gravity)
+            {
+                p.vy += s.gravity;
+                const int limit = (holding_down && p.state != ST_KO) ? s.fast_fall : s.max_fall;
+                if(p.vy > limit) { p.vy = limit; }
+            }
+
+            const int old_y16 = p.y16;
+            p.x16 += p.vx;
+            p.y16 += p.vy;
+
+            const int min_x = BODY_MARGIN * FP;
+            const int max_x = (stage.length - BODY_MARGIN) * FP;
+            if(p.x16 < min_x) { p.x16 = min_x; p.vx = 0; }
+            if(p.x16 > max_x) { p.x16 = max_x; p.vx = 0; }
+
+            bool landed = false;
+            int support = -1;
+            if(p.vy >= 0)
+            {
+                int best_y16 = stage.ground_y * FP;
+                if(p.y16 >= best_y16) { landed = true; }
+
+                if(p.drop_timer == 0)
+                {
+                    const int foot_x = p.x16 / FP;
+                    for(int k = 0; k < stage.platform_count; ++k)
+                    {
+                        const Platform& pl = stage.platforms[k];
+                        const int top16 = pl.y * FP;
+                        if(foot_x >= pl.x && foot_x <= pl.x + pl.w && old_y16 <= top16 && p.y16 >= top16 && (!landed || top16 < best_y16))
+                        {
+                            landed = true;
+                            best_y16 = top16;
+                            support = k;
+                        }
+                    }
+                }
+
+                if(landed)
+                {
+                    p.y16 = best_y16;
+                    p.vy = 0;
+                }
+            }
+
+            p.on_ground = landed;
+            p.support = landed ? support : -1;
+            if(landed) { p.jumps_left = s.max_jumps; p.air_used = 0; }
+        }
+
+        // ---------------------------------------------------------------------------- shots
+
+        // Puts a shot into the world, in front of the fighter who fires it.
+        void spawn_shot(int owner, const Shot& sh)
+        {
+            const Fighter& p = f[owner];
+            for(Projectile& pr : proj)
+            {
+                if(pr.active) { continue; }
+                pr = Projectile();
+                pr.active = true;
+                pr.id = next_projectile_id++;
+                pr.owner = owner;
+                pr.x16 = p.x16 + p.facing * sh.dx * FP;
+                pr.y16 = p.y16 - sh.dy * FP;
+                pr.vx = p.facing * sh.speed;
+                pr.life = sh.life;
+                pr.shot = sh;
+                return;
+            }
+        }
+
+        // fox thief, second press: send the stolen shot back (a bit stronger and faster)
+        void throw_stored(int i, int power)
+        {
+            Fighter& p = f[i];
+            Shot sh = p.stored;
+            sh.speed = sh.speed * power / 100;
+            sh.damage = sh.damage * power / 100;
+            if(sh.damage < 1) { sh.damage = 1; }
+            spawn_shot(i, sh);
+            p.has_stored = false;
+            ev.shot = true;
+        }
+
+        void update_projectiles()
+        {
+            for(Projectile& pr : proj)
+            {
+                if(!pr.active) { continue; }
+
+                pr.x16 += pr.vx;
+                ++pr.age;
+                if(--pr.life <= 0 || pr.x16 < -32 * FP || pr.x16 > (stage.length + 32) * FP) { pr.active = false; continue; }
+
+                Fighter& target = f[1 - pr.owner];
+                if(target.state == ST_KO || pr.hit_done) { continue; }
+
+                const Shot& sh = pr.shot;
+                const Rect box{ pr.x16 / FP, pr.y16 / FP, sh.w, sh.h };
+                Rect body = hurtbox_of(target);
+
+                // fox thief: while the stance is up, a shot that comes close is stolen instead of hurting
+                const Move* tm = target.move;
+                if(sh.absorbable && !target.has_stored && target.state == ST_ATTACK && tm && tm->absorb_end > tm->absorb_start &&
+                   target.move_frame >= tm->absorb_start && target.move_frame < tm->absorb_end)
+                {
+                    Rect catch_zone = body;
+                    catch_zone.w += ABSORB_MARGIN * 2;
+                    catch_zone.h += ABSORB_MARGIN * 2;
+                    if(overlaps(box, catch_zone))
+                    {
+                        target.has_stored = true;
+                        target.stored = sh;
+                        pr.active = false;
+                        ev.absorb = true;
+                        continue;
+                    }
+                }
+
+                if(overlaps(box, body))
+                {
+                    int dir = sign_i(pr.vx);
+                    if(dir == 0) { dir = sign_i(target.x16 - pr.x16); }   // an explosion pushes away from its middle
+                    if(dir == 0) { dir = f[pr.owner].facing; }
+                    hit(target, sh.damage, sh.kb_x, sh.kb_y, sh.hitstun, dir, pr.x16, pr.y16);
+                    if(sh.persist) { pr.hit_done = true; } else { pr.active = false; }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------- melee
+
+        // Checks every active hitbox against the opponent. Everything that touches this frame is collected first and
+        // applied afterwards, so two fighters that hit each other on the same frame BOTH get hit (a trade).
+        void resolve_melee()
+        {
+            PendingHit pending[2 * MAX_HITBOXES];
+            int count = 0;
+
+            for(int a = 0; a < 2; ++a)
+            {
+                const Fighter& p = f[a];
+                const Fighter& t = f[1 - a];
+                if(p.state != ST_ATTACK || !p.move || t.state == ST_KO) { continue; }
+
+                const Rect body = hurtbox_of(t);
+                for(int k = 0; k < p.move->hit_count; ++k)
+                {
+                    Rect box;
+                    if(!hitbox_now(a, k, box) || (p.hit_done & (1u << k)) || !overlaps(box, body)) { continue; }
+
+                    const Hitbox& h = p.move->hits[k];
+                    const int gap = t.x16 - p.x16;
+                    PendingHit& ph = pending[count++];
+                    ph.attacker = a;
+                    ph.index = k;
+                    ph.box = h;
+                    // launched away from the attacker (so a hit BEHIND flies backwards). Straight above or below: use the hitbox's side
+                    ph.dir = abs_i(gap) < 3 * FP ? (h.x < 0 ? -p.facing : p.facing) : sign_i(gap);
+                    ph.sx16 = ((box.x + body.x) / 2) * FP;
+                    ph.sy16 = ((box.y + body.y) / 2) * FP;
+                    ph.stops_dash = p.move->drive.stop_on_hit;
+                }
+            }
+
+            for(int n = 0; n < count; ++n)
+            {
+                const PendingHit& ph = pending[n];
+                Fighter& attacker = f[ph.attacker];
+                attacker.hit_done |= 1u << ph.index;
+                if(ph.stops_dash && attacker.state == ST_ATTACK) { attacker.drive_cut = true; }
+                hit(f[1 - ph.attacker], ph.box.damage, ph.box.kb_x, ph.box.kb_y, ph.box.hitstun, ph.dir, ph.sx16, ph.sy16);
+            }
+        }
+
+        // ---------------------------------------------------------------------------- getting hit
+
+        void spawn_effect(int kind, int x16, int y16, int life)
+        {
+            for(Effect& e : fx)
+            {
+                if(e.active) { continue; }
+                e.active = true;
+                e.kind = kind;
+                e.x16 = x16;
+                e.y16 = y16;
+                e.age = 0;
+                e.life = life;
+                return;
+            }
+        }
+
+        void hit(Fighter& t, int damage, int kb_x, int kb_y, int stun, int dir, int sx16, int sy16)
+        {
+            hurt(t, damage, kb_x, kb_y, stun, dir);
+            spawn_effect(FX_SPARK, sx16, sy16, 10);
+        }
+
+        // KNOCKBACK: the victim is thrown with the hit's launch speed. The less HP is left, the further they fly,
+        // and heavier fighters fly less. dir = +1 launches to the right.
+        void launch(Fighter& t, int kb_x, int kb_y, int dir)
+        {
+            const FighterStats& s = *t.stats;
+            int scale = 100 + KB_HP_BONUS * (s.max_hp - t.hp) / s.max_hp;
+            scale = scale * 100 / (s.weight > 0 ? s.weight : 100);
+            t.vx = dir * kb_x * scale / 100;
+            t.vy = kb_y * scale / 100;
+            if(t.vy < 0) { t.on_ground = false; t.support = -1; }         // thrown upward: you leave the ground
+        }
+
+        // Damage goes through the defenses. A shield removes a LOT of it, but the boost fades as the shield drains.
+        void hurt(Fighter& t, int damage, int kb_x, int kb_y, int stun, int dir)
+        {
+            const FighterStats& s = *t.stats;
+            int reduction = s.defense;
+            const bool guarding = t.state == ST_SHIELD;
+            if(guarding) { reduction += SHIELD_MAX_REDUCTION * t.shield / SHIELD_MAX; }
+            if(reduction > 95) { reduction = 95; }
+
+            int dealt = damage * (100 - reduction) / 100;
+            if(dealt < 1) { dealt = 1; }                                  // there is always a little chip damage
+            t.hp -= dealt;
+
+            if(t.hp <= 0)
+            {
+                t.hp = 0;
+                cancel_move(t);
+                t.state = ST_KO;
+                t.timer = 0;
+                launch(t, kb_x, kb_y, dir);                               // the final blow sends them flying too
+                ev.ko = true;
+            }
+            else if(guarding)
+            {
+                ev.blocked = true;
+                t.vx = dir * abs_i(kb_x) / SHIELD_PUSH;                   // a guard is only pushed back a little
+                t.shield -= dealt * SHIELD_HIT_COST;                      // taking hits wears the shield down faster
+                if(t.shield <= 0) { t.shield = 0; t.shield_locked = true; t.state = ST_IDLE; }
+            }
+            else
+            {
+                ev.hit = true;
+                cancel_move(t);                                           // being hit interrupts whatever you were doing
+                t.state = ST_HURT;
+                t.timer = stun > 0 ? stun : HURT_FRAMES;
+                launch(t, kb_x, kb_y, dir);
+            }
+        }
+
+        static void cancel_move(Fighter& t)
+        {
+            t.move = nullptr;
+            t.move_frame = 0;
+            t.driving = false;
+            t.drive_cut = false;
+        }
+    };
+}
+
+#endif

@@ -1,0 +1,11 @@
+python3 - <<'EOF'
+import wave, glob
+
+for name in ["title", "game", "house", "battle"]:
+    files = sorted(glob.glob(f"{name}_*.wav"))
+    lengths = []
+    for f in files:
+        with wave.open(f) as w:
+            lengths.append(w.getnframes() * 1_000_000 // w.getframerate())
+    print(f"constexpr int {name}_us[] = {{ {', '.join(map(str, lengths))} }};   // {len(files)} chunks")
+EOF

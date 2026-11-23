@@ -1,4 +1,4 @@
-#define GAME_VER "0.3.4p"
+#define GAME_VER "0.3.9p"
 #include "bn_core.h"
 #include "bn_color.h"
 #include "bn_bg_palettes.h"
@@ -13,12 +13,16 @@
 #include "bn_sprite_items_player.h"
 #include "bn_sprite_affine_mat_ptr.h"
 #include "bn_regular_bg_ptr.h"
+// Battle BG
 #include "bn_regular_bg_items_layer_2_mountains.h"
 #include "bn_regular_bg_items_layer_3_hills.h"
 #include "bn_regular_bg_items_layer_4_forest.h"
+#include "bn_regular_bg_items_house_bg.h"
+
 #include "bn_sound_items.h"
 #include "bn_sound_item.h"
 #include "bn_sound_handle.h"
+#include "bn_sound.h"
 
 //characters
 #include "bn_sprite_items_waffle.h"
@@ -27,15 +31,20 @@
 
 #include "bn_sprite_items_black_block.h"   // solid black 64x64, used by the screen transition
 #include "phone.h"
+#include "battle.h"
+#include "battle_moves.h"
 
 // the maps: ground picture, the layer drawn in front of the player, and the collision grids
 #include "bn_regular_bg_items_world.h"
 #include "bn_regular_bg_items_world_top.h"
 #include "bn_regular_bg_items_world2.h"
 #include "bn_regular_bg_items_house_interior.h"
+#include "bn_regular_bg_items_demo.h"
+#include "bn_regular_bg_items_demo_top.h"
 #include "world_map.h"              // namespace world
 #include "world2_map.h"             // namespace world2
 #include "house_interior_map.h"     // namespace house_interior
+#include "demo_map.h"
 
 
 
@@ -57,48 +66,67 @@ namespace
         return v;
     }
 
+    constexpr int FRAME_US = 16743;   // one GBA frame is ~16.743 ms
+
     struct MusicTrack
     {
-        const bn::sound_item* chunks;   // played one after another, looping forever
+        const bn::sound_item* chunks;
+        const int* chunk_us;            // length of each chunk in microseconds
         int count;
-        bn::fixed volume;               // 0 to 1
+        bn::fixed volume;
     };
 
     template<int N>
-    constexpr MusicTrack make_track(const bn::sound_item (&chunks)[N], bn::fixed volume = 1)
+    constexpr MusicTrack make_track(const bn::sound_item (&chunks)[N], const int (&lengths_us)[N], bn::fixed volume = 1)
     {
-        return MusicTrack{ chunks, N, volume };
+        return MusicTrack{ chunks, lengths_us, N, volume };
     }
-
     constexpr bn::sound_item title_chunks[] = { bn::sound_items::title_00, bn::sound_items::title_01, bn::sound_items::title_02, bn::sound_items::title_03, bn::sound_items::title_04 };
     constexpr bn::sound_item game_chunks[]  = { bn::sound_items::game_00, bn::sound_items::game_01, bn::sound_items::game_02, bn::sound_items::game_03, bn::sound_items::game_04 };
     constexpr bn::sound_item house_chunks[] = { bn::sound_items::house_00, bn::sound_items::house_01,bn::sound_items::house_02,bn::sound_items::house_03,bn::sound_items::house_04,bn::sound_items::house_05,bn::sound_items::house_06};
+    constexpr bn::sound_item battle_chunks[]= { bn::sound_items::battle_00,bn::sound_items::battle_01,bn::sound_items::battle_02,bn::sound_items::battle_03,bn::sound_items::battle_04,bn::sound_items::battle_05};
 
-    constexpr MusicTrack title_track = make_track(title_chunks);
-    constexpr MusicTrack game_track  = make_track(game_chunks);
-    constexpr MusicTrack house_track = make_track(house_chunks);
+    constexpr int title_us[] = { 18023764, 17998367, 17998367, 17998367, 15282358 };   // 5 chunks
+    constexpr int game_us[] = { 18024807, 17998367, 17998367, 17998367, 15280090 };   // 5 chunks
+    constexpr int house_us[] = { 18023500, 17998375, 17998312, 17998375, 17998375, 17998375, 6688375 };   // 7 chunks
+    constexpr int battle_us[] = { 18023937, 18000000, 18000000, 18000000, 18000000, 2665750 };   // 6 chunks
+    constexpr MusicTrack game_track = make_track(game_chunks, game_us);
+    constexpr MusicTrack title_track = make_track(title_chunks, title_us);
+    constexpr MusicTrack house_track = make_track(house_chunks, house_us);
+    constexpr MusicTrack battle_track = make_track(battle_chunks, battle_us);
 
     struct MusicPlayer
     {
         const MusicTrack* track = nullptr;
         int chunk = 0;
+        int elapsed_us = 0;
         bn::optional<bn::sound_handle> handle;
+
+        void start_chunk(int carry_us)
+        {
+            handle = track->chunks[chunk].play(track->volume);
+            elapsed_us = carry_us;      // keep the leftover so rounding never accumulates into drift
+        }
 
         void play(const MusicTrack& new_track)
         {
-            if(track == &new_track) { return; }      // already playing it: two maps can share a song without a restart
+            if(track == &new_track) { return; }
             stop();
             track = &new_track;
             chunk = 0;
-            handle = track->chunks[0].play(track->volume);
+            start_chunk(0);
         }
 
-        void update()                                // call once per frame
+        void update()                   // once per frame, same as before
         {
-            if(track && handle && !handle->active())
+            if(!track) { return; }
+
+            elapsed_us += FRAME_US;
+            if(elapsed_us >= track->chunk_us[chunk])
             {
+                const int carry = elapsed_us - track->chunk_us[chunk];
                 chunk = (chunk + 1) % track->count;
-                handle = track->chunks[chunk].play(track->volume);
+                start_chunk(carry);
             }
         }
 
@@ -115,6 +143,30 @@ namespace
                 break;
             case 2:
                 bn::sound_items::pick2.play();
+                break;
+            case 3:
+                bn::sound_items::step.play();
+                break;
+            case 4:
+                bn::sound_items::punch.play();
+                break;
+            case 5:
+                bn::sound_items::punch_s.play();
+                break;
+            case 6:
+                bn::sound_items::punch_h.play();
+                break;
+            case 7:
+                bn::sound_items::swing.play();
+                break;
+            case 8:
+                bn::sound_items::shieldhit.play();
+                break;
+            case 9:
+                bn::sound_items::nar_go.play();
+                break;
+            case 10:
+                bn::sound_items::gay.play();
                 break;
             default:
                 bn::sound_items::meow.play();
@@ -142,7 +194,7 @@ namespace
 
     constexpr int T = 16;           // one map tile, in pixels
 
-    enum MapId { MAP_WORLD, MAP_WORLD2, MAP_HOUSE };
+    enum MapId { MAP_WORLD, MAP_WORLD2, MAP_HOUSE, MAP_WORLD3};
 
     // A warp is a rectangle on a map, in world pixels. When the player's FEET step inside it,
     // the game loads dest_map and puts the player's center at (dest_x, dest_y) there.
@@ -155,6 +207,11 @@ namespace
         { 41 * T, 41 * T, T, T,                 MAP_HOUSE,  7 * T + 8, 11 * T },
         // the east edge of the world (a gap in the trees on rows 32-33) -> west side of world2
         { world::pixel_w - 8, 32 * T, 8, 2 * T, MAP_WORLD2, 3 * T,     32 * T + 8 },
+        { 0, 32 * T, 8, 2 * T,                  MAP_WORLD3, world::pixel_w - 3 * T, 32 * T + 8},
+    };
+    constexpr Warp world3_warps[] =
+    {
+        {world::pixel_w - 8, 32 * T, 8, 2 * T, MAP_WORLD, 3 * T, 32 * T + 8},
     };
 
     constexpr Warp world2_warps[] =
@@ -177,6 +234,7 @@ namespace
         {
             case MAP_HOUSE:  return house_interior::pixel_w;
             case MAP_WORLD2: return world2::pixel_w;
+            case MAP_WORLD3: return demo::pixel_w;
             default:         return world::pixel_w;
         }
     }
@@ -187,6 +245,7 @@ namespace
         {
             case MAP_HOUSE:  return house_interior::pixel_h;
             case MAP_WORLD2: return world2::pixel_h;
+            case MAP_WORLD3: return demo::pixel_h;
             default:         return world::pixel_h;
         }
     }
@@ -197,6 +256,7 @@ namespace
         {
             case MAP_HOUSE:  return house_interior::is_walkable(px, py);
             case MAP_WORLD2: return world2::is_walkable(px, py);
+            case MAP_WORLD3: return demo::is_walkable(px, py);
             default:         return world::is_walkable(px, py);
         }
     }
@@ -208,6 +268,7 @@ namespace
         {
             case MAP_HOUSE:  return "Home";
             case MAP_WORLD2: return "Second World";
+            case MAP_WORLD3: return "Terrain Test";
             default:         return "Grassy Plains";
         }
     }
@@ -218,7 +279,62 @@ namespace
             case MAP_WORLD:  return game_track;      // later: return house_track;
             case MAP_WORLD2: return game_track;
             case MAP_HOUSE: return house_track;
+            case MAP_WORLD3: return game_track;
             default:         return game_track;
+        }
+    }
+
+    // ================================================================================
+    // BATTLE STAGES: every map has its own. Change `length` to make a stage longer or shorter
+    // (240 = one screen, anything longer scrolls: the fighters can walk as far as the stage goes).
+    // Platforms: { left edge, height of the surface, width }, width must be a multiple of 32.
+    // Backgrounds: up to 3 layers, farthest first, { picture, speed % }: 25 = slow and far, 100 = keeps up with the camera.
+    // ================================================================================
+
+    constexpr battle::Platform world_platforms[]  = { { 96, 88, 64 }, { 416, 88, 96 } };
+    constexpr battle::Platform world2_platforms[] = { { 160, 84, 96 } };
+    constexpr battle::Platform house_platforms[]  = { { 80, 120, 64 } };
+
+    constexpr battle::StageDef world_stage =
+    {
+        //  length, floor, platforms, count, spawn (0 = automatic)
+        { 600, 128, world_platforms, 2, 0, 0 },
+        { { &bn::regular_bg_items::layer_2_mountains, 25 }, { &bn::regular_bg_items::layer_3_hills, 50 }, { &bn::regular_bg_items::layer_4_forest, 100 } }, 3,
+    };
+    constexpr battle::StageDef world2_stage =
+    {
+        { 480, 128, world2_platforms, 1, 0, 0 },
+        { { &bn::regular_bg_items::layer_2_mountains, 25 }, { &bn::regular_bg_items::layer_3_hills, 60 } }, 2,
+    };
+    constexpr battle::StageDef house_stage =                       // indoors: one screen wide, no backgrounds
+    {
+        { 300, 128, house_platforms, 1, 0, 0 },
+        {{ &bn::regular_bg_items::house_bg, 50}}, 1,
+    };
+    constexpr battle::StageDef world3_stage =
+    {
+        { 240, 128, house_platforms, 1, 0, 0},
+        { { &bn::regular_bg_items::layer_2_mountains, 25 }, { &bn::regular_bg_items::layer_3_hills, 50 }, { &bn::regular_bg_items::layer_4_forest, 100 } }, 3,
+    };
+
+    const battle::StageDef& map_stage(int id)
+    {
+        switch(id)
+        {
+            case MAP_HOUSE:  return house_stage;
+            case MAP_WORLD2: return world2_stage;
+            case MAP_WORLD3: return world3_stage;
+            default:         return world_stage;
+        }
+    }
+
+    // the music of a battle on each map (until you have battle songs, it keeps the map's own)
+    const MusicTrack& battle_music(int id)
+    {
+        switch(id)
+        {
+            case MAP_WORLD: return battle_track;
+            default: return battle_track;        // later: return battle_track;
         }
     }
 
@@ -228,6 +344,7 @@ namespace
         {
             case MAP_HOUSE:  return bn::regular_bg_items::house_interior.create_bg(0, 0);
             case MAP_WORLD2: return bn::regular_bg_items::world2.create_bg(0, 0);
+            case MAP_WORLD3: return bn::regular_bg_items::demo.create_bg(0, 0);
             default:         return bn::regular_bg_items::world.create_bg(0, 0);
         }
     }
@@ -238,6 +355,8 @@ namespace
         if(id == MAP_WORLD)
         {
             return bn::regular_bg_items::world_top.create_bg(0, 0);
+        } else if (id == MAP_WORLD3){
+            return bn::regular_bg_items::demo_top.create_bg(0, 0);
         }
         return bn::optional<bn::regular_bg_ptr>();
     }
@@ -252,6 +371,9 @@ namespace
             case MAP_WORLD2:
                 count = sizeof(world2_warps) / sizeof(world2_warps[0]);
                 return world2_warps;
+            case MAP_WORLD3:
+                count = sizeof(world3_warps) / sizeof(world3_warps[0]);
+                return world3_warps;
             default:
                 count = sizeof(world_warps) / sizeof(world_warps[0]);
                 return world_warps;
@@ -338,7 +460,7 @@ namespace
     constexpr int DLG_END  = -1;     // use as a "next" to close the box
     constexpr int DLG_KEEP = -1;     // use as "set_start" to leave the NPC's starting node alone
 
-    enum { ACT_NONE, ACT_FOLLOW, ACT_STOP_FOLLOW};   // things a dialogue node can make the NPC do
+    enum { ACT_NONE, ACT_FOLLOW, ACT_STOP_FOLLOW, ACT_BATTLE};   // things a dialogue node can make the NPC do (ACT_BATTLE: fight starts when the talk ends)
 
     enum //traits
     {
@@ -392,6 +514,7 @@ namespace
         int traits;
         const DialogueNode* nodes;           // their dialogue
         int start_node;                      // the node a conversation begins with (nodes can change it later)
+        const battle::FighterDef* fight = nullptr;   // fighting data. nullptr = this NPC can not fight (never give one a battle dialogue)
     };
 
     // ---- DIALOGUES ----
@@ -410,6 +533,7 @@ namespace
         FOX_CLONE, FOX_WOAH, FOX_CONFUSE,
         FOX_MENU, FOX_YES, FOX_NO,
         FOX_STOP, FOX_STOP_YES, FOX_STOP_NO,
+        FOX_HUB, FOX_FIGHT_Q, FOX_FIGHT_YES, FOX_FIGHT_NO,
     };
 
     enum UmbNode
@@ -428,6 +552,8 @@ namespace
     
     constexpr Choice fox_follow_choices[] = {{"Yes", FOX_YES}, {"No", FOX_NO}};
     constexpr Choice fox_stop_choices[] = {{"Yes", FOX_STOP_YES}, {"No", FOX_STOP_NO}};
+    constexpr Choice fox_hub_choices[] = {{"Follow", FOX_MENU}, {"Fight", FOX_FIGHT_Q}, {"Nothing", DLG_END}};
+    constexpr Choice fox_fight_choices[] = {{"Lets try", FOX_FIGHT_YES}, {"Nope", FOX_FIGHT_NO}};
 
     constexpr Choice umb_follow_choices[] = {{"Yes", UMB_YES}, {"No", UMB_NO}};
     constexpr Choice umb_stop_choices[] = {{"Right here", UMB_STOP_Y}, {"Not yet", UMB_STOP_N}};
@@ -460,14 +586,17 @@ namespace
     {
         say("Woah", FOX_WOAH),
         say("You're Me! I'm You!", FOX_CONFUSE),
-        say("Well Hi there cutie!", DLG_END, ACT_NONE, FOX_MENU),
+        say("Well Hi there cutie!", DLG_END, ACT_NONE, FOX_HUB),
         ask("Huh, want me to follow you?", fox_follow_choices),
         say("Oh, Okay. Lets go :3", DLG_END, ACT_FOLLOW, FOX_STOP ),
         say("Oh, uhm okay then,"),
         ask("Want me to stop following you?",fox_stop_choices),
-        say("Okay then, Unfollowed!", DLG_END, ACT_STOP_FOLLOW, FOX_MENU),
+        say("Okay then, Unfollowed!", DLG_END, ACT_STOP_FOLLOW, FOX_HUB),
         say("Okay, lets gooo uwu!"),
-
+        ask("What's up, me?", fox_hub_choices),                          // FOX_HUB: talking to him now starts here
+        ask("Fight? Me versus me!", fox_fight_choices),                  // FOX_FIGHT_Q
+        say("Im gonna wet you. Literally uwu", DLG_END, ACT_BATTLE),     // FOX_FIGHT_YES: the battle starts when this line is closed
+        say("Aww... maybe later."),                                      // FOX_FIGHT_NO
     };
     constexpr DialogueNode umb_nodes[]=
     {
@@ -485,6 +614,37 @@ namespace
         say("Yeah this is better.. but", UMB_RECOMMEND),
     };
 
+    // ---- FIGHTING DATA ----
+    // Your character and the Waffles NPC both use waffle_fighter, so they have the same moves.
+    // To give another NPC a fight: make a FighterDef for them (copy this one) and put its address
+    // at the end of their line in npc_defs. NPCs without one can never start a battle.
+    // constexpr battle::Move water_shot_move =
+    // {
+    //     4,                       // damage
+    //     8, 14,                   // startup and recovery, in frames (60 frames = 1 second)
+    //     battle::PROJ_WATER,
+    //     battle::fp(4), 70,     // shot speed (pixels per frame) and how long it lives (frames): range = 245 pixels
+    //     12, 8,                   // hitbox width and height
+    //     12, 14,                  // it appears this far in front of you and this far above your feet
+    // };
+    // constexpr battle::Move waffle_moves[] = { water_shot_move };         // moves[0] is the B button
+
+    constexpr battle::FighterDef waffle_fighter =
+    {
+        "Waffles",
+        &bn::sprite_items::waffle,                                       // the overworld sprite sheet is reused
+        {
+            240,                                                         // max HP
+            battle::fp(2.0), battle::fp(0.6), battle::fp(0.2), battle::fp(0.35),   // walk speed, ground accel, air accel, friction
+            88, 80, 2,                                                   // jump power, double jump power, jumps (2 = a double jump)
+            5, 112, 144,                                                 // gravity, fall speed, fast-fall speed
+            14, 26,                                                      // hurtbox width and height, in pixels
+            0,                                                           // defense: % of damage that is ALWAYS removed
+            100,                                                          // computer skill 0..100 (only used when the computer is this fighter)
+            &battle::waffle_moveset,                                     // the moveset
+        },
+    };
+
     // TO ADD AN NPC:
     //  1. #include its sprite header at the top ("bn_sprite_items_<name>.h")
     //     (its sheet needs the same frame layout as the others, because first_frame() is shared)
@@ -494,7 +654,7 @@ namespace
     {
         //  name       sprite                    map        x                        y                     wander    traits          nodes       start
         { "Filip:",  &bn::sprite_items::snep,  MAP_WORLD, world::pixel_w / 2 + 88, world::pixel_h / 2 + 8,  48 * T,   TRAIT_EXTROVERT, snep_nodes, SNEP_BABE },
-        { "Waffles:", &bn::sprite_items::waffle, MAP_WORLD, world::pixel_w/2 + 50, world::pixel_h/2 + 10, 90 * T, TRAIT_PLAYFUL | TRAIT_INTROVERT, fox_nodes, FOX_CLONE},
+        { "Waffles:", &bn::sprite_items::waffle, MAP_WORLD, world::pixel_w/2 + 50, world::pixel_h/2 + 10, 90 * T, TRAIT_PLAYFUL | TRAIT_INTROVERT, fox_nodes, FOX_CLONE, &waffle_fighter},
         { "Umbreon:", &bn::sprite_items::umbreon, MAP_WORLD2, world::pixel_w/2 + 50, world::pixel_h/2 + 30, 30 * T, TRAIT_WALKER | TRAIT_PLAYFUL, umb_nodes, UMB_START},
     };
     constexpr int npc_count = sizeof(npc_defs) / sizeof(npc_defs[0]);
@@ -572,7 +732,7 @@ namespace
         int map;                       // the map they are on right now
         bn::fixed x;                   // world position, same system as the player
         bn::fixed y;
-        int home_x;                    // wanderers never go far from here
+        int home_x;                    // kind of like an anchor or something
         int home_y;
         int dir;
         int state;
@@ -605,9 +765,11 @@ namespace
 
     // Throw away the NPCs of the old map (this frees their sprites) and create the ones standing on map_id.
     // Followers come with the player: they are moved to the player's position first.
-    void spawn_npcs(bn::ivector<Npc>& npcs, int map_id, int player_x, int player_y)
+    // Remember what every NPC is doing, then free all their sprites (and the video memory they hold).
+    // Used while a battle takes over the screen. spawn_npcs() brings them back afterwards.
+    void park_npcs(bn::ivector<Npc>& npcs)
     {
-        for(const Npc& n : npcs)                     // remember what the old NPCs were doing
+        for(const Npc& n : npcs)
         {
             NpcSave& s = npc_save[n.id];
             s.x = n.x.integer();
@@ -618,6 +780,11 @@ namespace
             s.following = n.following;
         }
         npcs.clear();
+    }
+
+    void spawn_npcs(bn::ivector<Npc>& npcs, int map_id, int player_x, int player_y)
+    {
+        park_npcs(npcs);                             // remember what the old NPCs were doing, and free them
 
         for(int i = 0; i < npc_count; ++i)
         {
@@ -861,6 +1028,7 @@ namespace
         Npc* npc = nullptr;                          // who we are talking to; nullptr = nobody
         int node = 0;                                // which DialogueNode of theirs is on screen
         int choice = 0;                              // which answer is highlighted (when the node asks something)
+        int battle_npc = -1;                         // set by an ACT_BATTLE line: the NPC to fight once the talk is over (-1 = none)
         bn::vector<bn::sprite_ptr, 48> text_sprites; // the name and the line
         bn::vector<bn::sprite_ptr, 32> choice_sprites;
         bn::vector<bn::sprite_ptr, 4> box;           // the black box behind the text
@@ -911,6 +1079,10 @@ namespace
             npc.state = NPC_WAIT;
             npc.timer = 60;
         }
+        if(node.action == ACT_BATTLE && npc.def->fight)
+        {
+            c.battle_npc = npc.id;                    // the fight begins when the player closes this line (see game_screen)
+        }
         if(node.set_start >= 0) { npc.start_node = node.set_start; }
 
         c.text_sprites.clear();
@@ -928,7 +1100,7 @@ namespace
         c.node = npc.start_node;
         face_player(npc, player_x, player_y);
 
-        for(int i = 0; i < 4; ++i)                   // a black box behind the text (reuses your transition sprite)
+        for(int i = 0; i < 4; ++i)                   // a black box behind the text (reuses transition sprite)
         {
             bn::sprite_ptr b = bn::sprite_items::black_block.create_sprite(bn::fixed(-96 + i * 64), 64);
             b.set_bg_priority(0);
@@ -1095,6 +1267,7 @@ namespace
 
         Conversation talk;                    // the dialogue box: who we talk to, which node, which answer is picked
         static phone::Phone phone_ui;     // static: it is big, so it lives in normal memory, not on the small stack
+        static battle::Battle battle_ui;
 
         // screen transition state
         bn::vector<bn::sprite_ptr, 12> blocks;   // the black block
@@ -1102,6 +1275,7 @@ namespace
         int trans_warp = 0;                      // which warp of the current map we are going through
         int trans_dir = DOWN;                    // the way the player was facing when it started
         bn::fixed trans_pos = 0;                 // 0 = the block covers the whole screen
+        int battle_npc = -1;                     // >= 0: the wipe that is closing is the start of a battle against this NPC
         // bool snepTalked = false;
         // DEBUGGING THE TEXT BOX
         // bn::vector<bn::sprite_ptr, 8> test_sprites;
@@ -1109,8 +1283,39 @@ namespace
 
         while(true)
         {
-                        // ---- the phone: L opens it, and the world freezes while it is open ----
-            if(phone_ui.active())
+            // ---- the phone: L opens it, and the world freezes while it is open ----
+            // ---- the battle: while it runs, the world is hidden and frozen ----
+            if(battle_ui.active())
+            {
+                battle_ui.update(text);
+
+                const unsigned ev = battle_ui.events;                   // sound effects: change these numbers to your own sounds
+                if(ev & battle::EV_SHOT) { sfx(7); }
+                if(ev & battle::EV_HIT)  { sfx(4); }
+                if(ev & battle::EV_KO)   { sfx(6); sfx(10);}
+                if(ev & battle::EV_BLOCKED) {sfx(8);}
+                if(ev & battle::EV_FIGHT) {sfx(9);}
+
+                if(!battle_ui.active())                                 // it just ended: the black blocks cover the screen again
+                {
+                    ground_bg = make_ground(current_map);               // bring the overworld back
+                    top_bg = make_top(current_map);
+                    ground_bg->set_priority(2);
+                    if(top_bg) { top_bg->set_priority(0); }
+                    waffle.set_visible(true);
+                    spawn_npcs(npcs, current_map, x.integer(), y.integer());   // the NPCs come back (followers next to you)
+                    text.set_center_alignment();
+                    text.generate(-65,70, map_name(current_map), text_sprites);
+                    music.stop();
+                    bn::sound::stop_all();                  // don't rely on the handle after a busy battle
+                    music.play(map_music(current_map));
+                    battle_ui.release_blocks(blocks);                   // take the blocks back and slide them away, like after a warp
+                    trans_phase = 2;
+                    trans_dir = RIGHT;
+                    trans_pos = 0;
+                }
+            }
+            else if(phone_ui.active())
             {
                 phone_ui.update(text);
             }
@@ -1119,7 +1324,7 @@ namespace
                 phone_ui.open(text);
             }
             
-            if(bn::keypad::start_pressed() && !phone_ui.active())
+            if(bn::keypad::start_pressed() && !phone_ui.active() && !battle_ui.active())
             {
                 paused = !paused;
 
@@ -1133,7 +1338,7 @@ namespace
                     pause_text_sprites.clear();
                 }
             }
-            if (!paused && !phone_ui.active())
+            if (!paused && !phone_ui.active() && !battle_ui.active())
             {
                 bn::fixed dx = 0;
                 bn::fixed dy = 0;
@@ -1141,6 +1346,7 @@ namespace
                 if(bn::keypad::right_held()) { dx += 1; }
                 if(bn::keypad::up_held())    { dy -= 1; }
                 if(bn::keypad::down_held())  { dy += 1; }
+                // if(bn::keypad::r_pressed()) {sfx(8); sfx(4);}
                 if(trans_phase != 0 || talk.active()) { dx = 0; dy = 0; }   // the player stands still while the screen wipes and talking
 
                 const bool moving = dx != 0 || dy != 0;
@@ -1194,6 +1400,15 @@ namespace
                 if(talk.active())
                 {
                     update_conversation(talk, text);
+                    if(!talk.active() && talk.battle_npc >= 0)          // the last line asked for a fight: close the screen
+                    {
+                        battle_npc = talk.battle_npc;
+                        talk.battle_npc = -1;
+                        trans_phase = 1;
+                        trans_dir = dir;
+                        trans_pos = transition_distance(dir);
+                        make_blocks(blocks);
+                    }
                 }
                 else if(trans_phase == 0 && bn::keypad::a_pressed())
                 {
@@ -1233,7 +1448,21 @@ namespace
                 {
                     trans_pos -= TRANSITION_SPEED;
 
-                    if(trans_phase == 1 && trans_pos <= 0)
+                    if(trans_phase == 1 && trans_pos <= 0 && battle_npc >= 0)
+                    {
+                        trans_pos = 0;                                // the screen is fully covered: this wipe was for a battle
+                        const NpcDef& foe = npc_defs[battle_npc];
+                        ground_bg.reset();                            // the battle needs those background slots
+                        top_bg.reset();
+                        waffle.set_visible(false);                    // hide the overworld
+                        park_npcs(npcs);                              // free the NPC sprites too: the battle needs their video memory
+                        text_sprites.clear();
+                        music.play(battle_music(current_map));
+                        battle_ui.start(waffle_fighter, *foe.fight, map_stage(current_map), blocks, text, unsigned(random_int(60000) + 1));
+                        battle_npc = -1;
+                        trans_phase = 0;                              // the battle owns the black blocks now
+                    }
+                    else if(trans_phase == 1 && trans_pos <= 0)
                     {
                         trans_pos = 0;                                // the screen is fully covered: swap the maps now
                         const Warp& w = warps[trans_warp];
@@ -1269,6 +1498,8 @@ namespace
                     }
                 }
 
+                if(!battle_ui.active())       // (the overworld is gone on the frame a battle starts)
+                {
                 // ---- camera: follows the player, stops at the edges of the current map ----
                 const int map_w = map_width(current_map);
                 const int map_h = map_height(current_map);
@@ -1291,6 +1522,7 @@ namespace
 
                 // depth sorting: whoever is lower on the map is drawn in front
                 waffle.set_z_order(-y.integer());
+                }
             }
 
             // if(!music.active())   // this chunk finished, so start the next one

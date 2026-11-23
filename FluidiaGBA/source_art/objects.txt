@@ -1,2 +1,0 @@
-# picture   x  y   solid parts (tiles)            in-front rows
-house.png    40 38  block 0 2 4 1  block 0 3 1 1  block 2 3 2 1  top 32
