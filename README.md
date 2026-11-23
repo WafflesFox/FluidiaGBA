@@ -25,7 +25,7 @@ Built with [Butano](https://github.com/GValiente/butano), a modern C++ engine fo
 
 - `Engine:` Butano by Gustavo Valiente.
 - `Pixel Art:` Made by Me
-- `Music:` all found in Pixabay
+- `Music:` Petal Dance by TobyFox, and the rests are found in Pixabay
 
 ## Disclaimer stuff
 Im still new to developing actual stuff for actual things, so AI was used on few parts. but I am learning as I progress. I learned that C++ is absolutely hell to look at
