@@ -1,4 +1,4 @@
-#define GAME_VER "0.4.4p"
+#define GAME_VER "0.4.5a"
 #include "bn_core.h"
 #include "bn_color.h"
 #include "bn_bg_palettes.h"
@@ -33,6 +33,8 @@
 #include "phone.h"
 #include "battle.h"
 #include "battle_moves.h"
+#include "net_link.h"
+#include "bn_sprite_palette_ptr.h"
 
 // the maps: ground picture, the layer drawn in front of the player, and the collision grids
 #include "bn_regular_bg_items_world.h"
@@ -692,6 +694,8 @@ namespace
             0,                                                           // defense: % of damage that is ALWAYS removed
             60,                                                          // computer skill 0..100 (only used when the computer is this fighter)
             &battle::waffle_moveset,                                     // the moveset
+            100, 100, 100,
+            &battle::waffle_fs_start,
         },
     };
     constexpr battle::FighterDef snep_fighter =
@@ -1351,6 +1355,69 @@ namespace
         Conversation talk;                    // the dialogue box: who we talk to, which node, which answer is picked
         static phone::Phone phone_ui;     // static: it is big, so it lives in normal memory, not on the small stack
         static battle::Battle battle_ui;
+        bool debug_mode = false;
+        bn::vector<bn::sprite_ptr, 8> debug_text_sprites;
+        net::LinkSession net_session;
+        bn::sprite_ptr remote_waffle = bn::sprite_items::waffle.create_sprite(0, 0, first_frame(DOWN, false));
+        bn::sprite_palette_ptr remote_pal = bn::sprite_palette_ptr::create_new(bn::sprite_items::waffle.palette_item());
+        remote_pal.set_fade(bn::color(6, 18, 31), 0.35);
+        remote_waffle.set_palette(remote_pal);
+        remote_waffle.set_bg_priority(1);
+        remote_waffle.set_visible(false);
+        bn::fixed remote_draw_x = 0;
+        bn::fixed remote_draw_y = 0;
+        int remote_step = 0;
+        int remote_anim_timer = 0;
+        int remote_shown = first_frame(DOWN, false);
+
+        bn::vector<bn::sprite_ptr, 12> conn_text_sprites;
+        int conn_banner_timer = 0;
+
+        enum NetPrompt { NP_NONE, NP_CONFIRM_REQ, NP_WAIT_REPLY, NP_INCOMING_REQ, NP_DECLINED };
+        int net_prompt = NP_NONE;
+        int net_choice = 0;
+        int net_prompt_timer = 0;
+        int decline_send_timer = 0;
+        bool net_battle_pending = false;
+        bn::vector<bn::sprite_ptr, 4> net_box;
+        bn::vector<bn::sprite_ptr, 32> net_prompt_text;
+        bn::vector<bn::sprite_ptr, 24> net_prompt_choices;
+
+        auto close_net_prompt = [&]()
+        {
+            net_prompt = NP_NONE;
+            net_box.clear();
+            net_prompt_text.clear();
+            net_prompt_choices.clear();
+        };
+
+        auto draw_net_choices = [&](const char* a, const char* b)
+        {
+            net_prompt_choices.clear();
+            text.set_center_alignment();
+            bn::string<20> l0(net_choice == 0 ? "> " : "  "); l0.append(a);
+            bn::string<20> l1(net_choice == 1 ? "> " : "  "); l1.append(b);
+            text.generate(-60, 72, l0, net_prompt_choices);
+            text.generate(60, 72, l1, net_prompt_choices);
+        };
+
+        auto open_net_box = [&](const char* title, const char* body, const char* c0, const char* c1)
+        {
+            net_box.clear();
+            net_prompt_text.clear();
+            net_prompt_choices.clear();
+            for(int i = 0; i < 4; ++i)
+            {
+                bn::sprite_ptr b = bn::sprite_items::black_block.create_sprite(bn::fixed(-96 + i * 64), 64);
+                b.set_bg_priority(0);
+                net_box.push_back(b);
+            }
+            text.set_center_alignment();
+            text.generate(-80, 40, title, net_prompt_text);
+            text.generate(0, 56, body, net_prompt_text);
+            net_choice = 0;
+            if(c0 && c1) { draw_net_choices(c0, c1); }
+        };
 
         // screen transition state
         bn::vector<bn::sprite_ptr, 12> blocks;   // the black block
@@ -1381,6 +1448,7 @@ namespace
                 if(ev & battle::EV_SWING) {sfx(7);}
                 if(ev & battle::EV_ABSORB) {sfx(15);}
                 if(ev & battle::EV_BOOM) {sfx(13);}
+                if(ev & battle::EV_FINAL_SMASH){sfx(11); sfx(14);}
                 if(ev & battle::EV_SMASH){sfx(5);}
 
                 if(!battle_ui.active())                                 // it just ended: the black blocks cover the screen again
@@ -1390,9 +1458,11 @@ namespace
                     ground_bg->set_priority(2);
                     if(top_bg) { top_bg->set_priority(0); }
                     waffle.set_visible(true);
+                    net_session.local_invite = net::INV_NONE;
                     spawn_npcs(npcs, current_map, x.integer(), y.integer());   // the NPCs come back (followers next to you)
                     text.set_center_alignment();
                     text.generate(-65,70, map_name(current_map), text_sprites);
+                    if(debug_mode) { text.set_right_alignment(); text.generate(112, -70, "DEBUG", debug_text_sprites); text.set_center_alignment(); }
                     music.stop();
                     bn::sound::stop_all();                  // don't rely on the handle after a busy battle
                     music.play(map_music(current_map));
@@ -1406,7 +1476,21 @@ namespace
             {
                 phone_ui.update(text);
             }
-            else if(bn::keypad::l_pressed() && !paused && trans_phase == 0 && !talk.active())
+            else if(!paused && trans_phase == 0 && !talk.active() &&
+                    bn::keypad::select_held() && bn::keypad::l_held() && bn::keypad::r_held() &&
+                    (bn::keypad::select_pressed() || bn::keypad::l_pressed() || bn::keypad::r_pressed()))
+            {
+                debug_mode = !debug_mode;
+                sfx(debug_mode ? 12 : 2);
+                debug_text_sprites.clear();
+                if(debug_mode)
+                {
+                    text.set_right_alignment();
+                    text.generate(112, -70, "DEBUG", debug_text_sprites);
+                    text.set_center_alignment();
+                }
+            }
+            else if(bn::keypad::l_pressed() && !bn::keypad::select_held() && !bn::keypad::r_held() && !paused && trans_phase == 0 && !talk.active())
             {
                 phone_ui.open(text);
             }
@@ -1434,7 +1518,7 @@ namespace
                 if(bn::keypad::up_held())    { dy -= 1; }
                 if(bn::keypad::down_held())  { dy += 1; }
                 // if(bn::keypad::r_pressed()) {sfx(8); sfx(4);}
-                if(trans_phase != 0 || talk.active()) { dx = 0; dy = 0; }   // the player stands still while the screen wipes and talking
+                if(trans_phase != 0 || talk.active() || net_prompt != NP_NONE) { dx = 0; dy = 0; }   // the player stands still while the screen wipes and talking
 
                 const bool moving = dx != 0 || dy != 0;
                 const bool running = moving && bn::keypad::b_held();
@@ -1483,11 +1567,112 @@ namespace
                     }
                 }
 
-                // ---- talking ----
-                if(talk.active())
+                // ---- link battle prompts & talking ----
+                if(net_prompt != NP_NONE)
+                {
+                    if(net_prompt == NP_CONFIRM_REQ)
+                    {
+                        if(bn::keypad::left_pressed() && net_choice > 0)  { sfx(2); net_choice = 0; draw_net_choices("Yes", "No"); }
+                        if(bn::keypad::right_pressed() && net_choice < 1) { sfx(2); net_choice = 1; draw_net_choices("Yes", "No"); }
+                        if(bn::keypad::b_pressed()) { sfx(2); close_net_prompt(); }
+                        else if(bn::keypad::a_pressed())
+                        {
+                            sfx(1);
+                            if(net_choice == 0 && net_session.connected)
+                            {
+                                net_session.local_invite = net::INV_REQUEST;
+                                net_prompt = NP_WAIT_REPLY;
+                                open_net_box("LINK BATTLE", "Waiting for reply... (B:Cancel)", nullptr, nullptr);
+                            }
+                            else { close_net_prompt(); }
+                        }
+                    }
+                    else if(net_prompt == NP_WAIT_REPLY)
+                    {
+                        if(bn::keypad::b_pressed() || !net_session.connected)
+                        {
+                            sfx(2);
+                            net_session.local_invite = net::INV_NONE;
+                            close_net_prompt();
+                        }
+                        else if(net_session.remote_invite == net::INV_REQUEST && net_session.my_id == 1)
+                        {
+                            net_session.local_invite = net::INV_ACCEPT;
+                            close_net_prompt();
+                            net_battle_pending = true;
+                            trans_phase = 1;
+                            trans_dir = dir;
+                            trans_pos = transition_distance(dir);
+                            make_blocks(blocks);
+                        }
+                        else if(net_session.remote_invite == net::INV_ACCEPT)
+                        {
+                            sfx(12);
+                            net_session.local_invite = net::INV_BUSY;
+                            close_net_prompt();
+                            net_battle_pending = true;
+                            trans_phase = 1;
+                            trans_dir = dir;
+                            trans_pos = transition_distance(dir);
+                            make_blocks(blocks);
+                        }
+                        else if(net_session.remote_invite == net::INV_DECLINE)
+                        {
+                            sfx(2);
+                            net_session.local_invite = net::INV_NONE;
+                            net_prompt = NP_DECLINED;
+                            net_prompt_timer = 60;
+                            open_net_box("LINK BATTLE", "Battle request declined.", nullptr, nullptr);
+                        }
+                    }
+                    else if(net_prompt == NP_INCOMING_REQ)
+                    {
+                        if(!net_session.connected || net_session.remote_invite == net::INV_NONE)
+                        {
+                            close_net_prompt();
+                        }
+                        else
+                        {
+                            if(bn::keypad::left_pressed() && net_choice > 0)  { sfx(2); net_choice = 0; draw_net_choices("Accept", "Decline"); }
+                            if(bn::keypad::right_pressed() && net_choice < 1) { sfx(2); net_choice = 1; draw_net_choices("Accept", "Decline"); }
+                            if(bn::keypad::b_pressed())
+                            {
+                                sfx(2);
+                                net_session.local_invite = net::INV_DECLINE;
+                                decline_send_timer = 35;
+                                close_net_prompt();
+                            }
+                            else if(bn::keypad::a_pressed())
+                            {
+                                sfx(1);
+                                if(net_choice == 0)
+                                {
+                                    net_session.local_invite = net::INV_ACCEPT;
+                                    close_net_prompt();
+                                    net_battle_pending = true;
+                                    trans_phase = 1;
+                                    trans_dir = dir;
+                                    trans_pos = transition_distance(dir);
+                                    make_blocks(blocks);
+                                }
+                                else
+                                {
+                                    net_session.local_invite = net::INV_DECLINE;
+                                    decline_send_timer = 35;
+                                    close_net_prompt();
+                                }
+                            }
+                        }
+                    }
+                    else if(net_prompt == NP_DECLINED)
+                    {
+                        if(--net_prompt_timer <= 0 || bn::keypad::a_pressed() || bn::keypad::b_pressed()) { close_net_prompt(); }
+                    }
+                }
+                else if(talk.active())
                 {
                     update_conversation(talk, text);
-                    if(!talk.active() && talk.battle_npc >= 0)          // the last line asked for a fight: close the screen
+                    if(!talk.active() && talk.battle_npc >= 0)
                     {
                         battle_npc = talk.battle_npc;
                         talk.battle_npc = -1;
@@ -1497,11 +1682,27 @@ namespace
                         make_blocks(blocks);
                     }
                 }
+                else if(trans_phase == 0 && net_session.connected && net_session.remote_invite == net::INV_REQUEST && decline_send_timer == 0)
+                {
+                    sfx(12);
+                    net_prompt = NP_INCOMING_REQ;
+                    open_net_box("LINK BATTLE", "Other player wants to battle!", "Accept", "Decline");
+                }
                 else if(trans_phase == 0 && bn::keypad::a_pressed())
                 {
                     sfx(1);
-                    Npc* target = npc_in_reach(npcs, x.integer(), y.integer());   // nearest NPC within reach
-                    if(target)
+                    const bool near_remote = net_session.connected && net_session.has_remote_pos &&
+                                             net_session.remote_map == current_map &&
+                                             abs_int(x.integer() - net_session.remote_x) < 28 &&
+                                             abs_int(y.integer() - net_session.remote_y) < 28;
+                    Npc* target = npc_in_reach(npcs, x.integer(), y.integer());
+                    if(near_remote && (!target || (abs_int(x.integer() - net_session.remote_x) + abs_int(y.integer() - net_session.remote_y)) <=
+                                                  (abs_int(x.integer() - target->x.integer()) + abs_int(y.integer() - target->y.integer()))))
+                    {
+                        net_prompt = NP_CONFIRM_REQ;
+                        open_net_box("LINK BATTLE", "Request a battle?", "Yes", "No");
+                    }
+                    else if(target)
                     {
                         start_conversation(talk, *target, x.integer(), y.integer(), text);
                     }
@@ -1535,7 +1736,70 @@ namespace
                 {
                     trans_pos -= TRANSITION_SPEED;
 
-                    if(trans_phase == 1 && trans_pos <= 0 && battle_npc >= 0)
+                    if(trans_phase == 1 && trans_pos <= 0 && net_battle_pending)
+                    {
+                        trans_pos = 0;
+                        net_battle_pending = false;
+                        net_session.reset_battle_sync();
+                        net_session.local_invite = net::INV_BUSY;
+
+                        int btl_map = current_map;
+                        unsigned btl_seed = unsigned(random_int(500) + 1);
+                        bool synced = false;
+
+                        if(net_session.my_id == 0)
+                        {
+                            const int pkt = (net::PKT_BTL_SEED << 12) | ((btl_seed & 0x1FF) << 3) | (btl_map & 7);
+                            for(int w = 0; w < 90; ++w)
+                            {
+                                bn::link::send(pkt);
+                                net_session.poll();
+                                if(net_session.peer_ready) { synced = true; break; }
+                                music.update();
+                                bn::core::update();
+                            }
+                        }
+                        else
+                        {
+                            for(int w = 0; w < 90; ++w)
+                            {
+                                net_session.poll();
+                                if(net_session.got_seed)
+                                {
+                                    btl_map = net_session.synced_map;
+                                    btl_seed = net_session.synced_seed;
+                                    bn::link::send((net::PKT_BTL_READY << 12) | 1);
+                                    synced = true;
+                                    break;
+                                }
+                                music.update();
+                                bn::core::update();
+                            }
+                        }
+
+                        if(synced)
+                        {
+                            ground_bg.reset();
+                            top_bg.reset();
+                            waffle.set_visible(false);
+                            remote_waffle.set_visible(false);
+                            park_npcs(npcs);
+                            text_sprites.clear();
+                            debug_text_sprites.clear();
+                            conn_text_sprites.clear();
+                            conn_banner_timer = 0;
+                            music.play(battle_music(btl_map));
+                            battle_ui.start(waffle_fighter, waffle_fighter, map_stage(btl_map), blocks, text, btl_seed,
+                                            nullptr, battle::Buff(), nullptr, false, &net_session, net_session.my_id);
+                            trans_phase = 0;
+                        }
+                        else
+                        {
+                            net_session.local_invite = net::INV_NONE;
+                            trans_phase = 2;
+                        }
+                    }
+                    else if(trans_phase == 1 && trans_pos <= 0 && battle_npc >= 0)
                     {
                         trans_pos = 0;                                // the screen is fully covered: this wipe was for a battle
                         const NpcDef& foe = npc_defs[battle_npc];
@@ -1556,8 +1820,12 @@ namespace
                         waffle.set_visible(false);                    // hide the overworld
                         park_npcs(npcs);                              // free the NPC sprites too: the battle needs their video memory
                         text_sprites.clear();
+                        debug_text_sprites.clear();
                         music.play(battle_music(current_map));
-                        battle_ui.start(waffle_fighter, *foe.fight, map_stage(current_map), blocks, text, unsigned(random_int(60000) + 1), partner, buff, bystander);
+                        remote_waffle.set_visible(false);
+                        conn_text_sprites.clear();
+                        conn_banner_timer = 0;
+                        battle_ui.start(waffle_fighter, *foe.fight, map_stage(current_map), blocks, text, unsigned(random_int(60000) + 1), partner, buff, bystander, debug_mode);
                         battle_npc = -1;
                         trans_phase = 0;                              // the battle owns the black blocks now
                     }
@@ -1621,6 +1889,40 @@ namespace
 
                 // depth sorting: whoever is lower on the map is drawn in front
                 waffle.set_z_order(-y.integer());
+
+                if(net_session.connected && net_session.has_remote_pos && net_session.remote_map == current_map)
+                {
+                    if(abs_int(net_session.remote_x - remote_draw_x.integer()) > 48 ||
+                       abs_int(net_session.remote_y - remote_draw_y.integer()) > 48)
+                    {
+                        remote_draw_x = net_session.remote_x;
+                        remote_draw_y = net_session.remote_y;
+                    }
+                    else
+                    {
+                        remote_draw_x += (bn::fixed(net_session.remote_x) - remote_draw_x) / 3;
+                        remote_draw_y += (bn::fixed(net_session.remote_y) - remote_draw_y) / 3;
+                    }
+                    if(net_session.remote_moving)
+                    {
+                        if(++remote_anim_timer >= (net_session.remote_running ? 5 : 8))
+                        {
+                            remote_anim_timer = 0;
+                            remote_step = (remote_step + 1) % 4;
+                        }
+                    }
+                    else { remote_step = 0; remote_anim_timer = 0; }
+                    const int rwanted = first_frame(net_session.remote_dir, net_session.remote_running) + walk_cycle[remote_step];
+                    if(rwanted != remote_shown)
+                    {
+                        remote_shown = rwanted;
+                        remote_waffle.set_tiles(bn::sprite_items::waffle.tiles_item(), rwanted);
+                    }
+                    remote_waffle.set_visible(true);
+                    remote_waffle.set_position(remote_draw_x - cam_x, remote_draw_y - cam_y);
+                    remote_waffle.set_z_order(-remote_draw_y.integer());
+                }
+                else { remote_waffle.set_visible(false); }
                 }
             }
 
@@ -1629,6 +1931,32 @@ namespace
             //     chunk = (chunk + 1) % music_chunks;
             //     music = gameMusic_chunk(chunk).play();
             // }
+            if(!battle_ui.active())
+            {
+                if(decline_send_timer > 0 && --decline_send_timer == 0 && net_session.local_invite == net::INV_DECLINE)
+                {
+                    net_session.local_invite = net::INV_NONE;
+                }
+                const bool busy_ow = paused || phone_ui.active() || talk.active() || trans_phase != 0;
+                if(busy_ow && net_session.local_invite == net::INV_NONE) { net_session.local_invite = net::INV_BUSY; }
+                else if(!busy_ow && net_session.local_invite == net::INV_BUSY) { net_session.local_invite = net::INV_NONE; }
+
+                const bool ow_moving = !busy_ow && net_prompt == NP_NONE &&
+                                       (bn::keypad::left_held() || bn::keypad::right_held() || bn::keypad::up_held() || bn::keypad::down_held());
+                const bool ow_running = ow_moving && bn::keypad::b_held();
+                net_session.update_overworld(x.integer(), y.integer(), current_map, dir, ow_running, ow_moving);
+
+                if(net_session.just_connected)
+                {
+                    sfx(12);
+                    conn_text_sprites.clear();
+                    text.set_left_alignment();
+                    text.generate(-112, -70, net_session.my_id == 0 ? "CONNECTED P1" : "CONNECTED P2", conn_text_sprites);
+                    text.set_center_alignment();
+                    conn_banner_timer = 180;
+                }
+                if(conn_banner_timer > 0 && --conn_banner_timer == 0) { conn_text_sprites.clear(); }
+            }
             music.update();
             bn::core::update();
         }

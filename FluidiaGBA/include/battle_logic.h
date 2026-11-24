@@ -19,6 +19,10 @@ namespace battle
     constexpr int fp(double pixels) { return int(pixels * FP); }     // fp(1.5) = 1.5 pixels, as a fixed value
 
     // ---- tuning that applies to every fighter ----
+    constexpr int SMASH_MAX = 1000;            // a full Final Smash gauge
+    constexpr int SMASH_HIT_GAIN = 3;         // charge gained per point of damage dealt
+    constexpr int SMASH_HURT_GAIN = 5;        // charge gained per point of damage taken
+    constexpr int SMASH_PASSIVE_FRAMES = 30;    // +1 charge every N frames while fighting
     constexpr int SHIELD_MAX = 1000;            // a full shield
     constexpr int SHIELD_DRAIN = 4;             // lost every frame the shield is held (250 frames = about 4 seconds)
     constexpr int SHIELD_REGEN = 2;             // regained every frame it is not held (500 frames = about 8 seconds)
@@ -47,8 +51,9 @@ namespace battle
     // DATA: what a move is, what a fighter is, what a stage is
     // ============================================================================================
 
-    enum { PROJ_WATER = 0, PROJ_EXPLOSION };    // which picture a shot uses (battle.h turns this into a sprite)
+    enum { PROJ_WATER = 0, PROJ_EXPLOSION, PROJ_JUNK_PENCIL, PROJ_JUNK_APPLE, PROJ_JUNK_BAT, PROJ_JUNK_LAPTOP, PROJ_JUNK_BALL };    // which picture a shot uses (battle.h turns this into a sprite)
     enum { FX_SPARK = 0 };                      // little effects (only the hit spark for now)
+    enum FinalSmashId { FS_NONE = 0, FS_WAFFLE_FIRE };
 
     // Which pose to show during a move. You have no attack sprites yet, so battle.h shows stand-in frames.
     // When you draw real ones, only pick_frame() in battle.h needs to change.
@@ -183,6 +188,7 @@ namespace battle
         const Move* on_absorb = nullptr;                       // a shot that was stolen (absorbs) starts this move at once
         const Move* on_grab = nullptr;                         // a hitbox with grabs() connected: this move takes over
         int land_end = 0;           // ends_on_landing: when a downward dash touches the ground, jump to this frame
+        int final_smash = FS_NONE; // >0: landing a melee hit with this move starts this Final Smash
 
         constexpr Move() = default;
         constexpr Move(const char* n, int total_frames, int pose) : name(n), duration(total_frames), anim(pose) {}
@@ -230,6 +236,7 @@ namespace battle
         constexpr Move after_grab(const Move* then) const { Move m = *this; m.on_grab = then; return m; }
         constexpr Move ends_on_landing(int frame) const { Move m = *this; m.land_end = frame; return m; }
         constexpr Move orbits_held() const { Move m = *this; m.flags |= MF_ORBIT_HELD; return m; }
+        constexpr Move starts_final_smash(int id) const { Move m = *this; m.final_smash = id; return m; }
     };
 
     // Which move sits in which slot. nullptr = this fighter simply has no such move.
@@ -265,6 +272,7 @@ namespace battle
         int weight = 100;       // 100 = normal. Heavier fighters (150) get launched less, lighter ones (70) more
         int phys_pct = 100;     // % of damage dealt by A moves (jab, smashes, aerials). 100 = normal, 120 = 20% stronger
         int magic_pct = 100;    // % of damage dealt by B moves (water gun, aqua jets...)
+        const Move* final_smash_move = nullptr; // starter move launched when SELECT is pressed with full meter
     };
 
     // A small bonus from a companion that follows you but does not fight (main.cpp turns NPC traits into one of these).
@@ -312,7 +320,8 @@ namespace battle
     // THE FIGHT
     // ============================================================================================
 
-    enum State { ST_IDLE, ST_WALK, ST_AIR, ST_ATTACK, ST_SHIELD, ST_HURT, ST_KO, ST_GRABBED };   // GRABBED: held by somebody, can't act
+    enum State { ST_IDLE, ST_WALK, ST_AIR, ST_ATTACK, ST_SHIELD, ST_HURT, ST_KO, ST_GRABBED };
+    enum DebugAiMode { DBG_AI_NORMAL = 0, DBG_AI_IDLE, DBG_AI_FORCE };   // GRABBED: held by somebody, can't act
 
     // what a fighter "pressed" this frame (the player's buttons, or the computer's decision)
     struct Input
@@ -324,6 +333,7 @@ namespace battle
         bool attack = false;    // A pressed this frame
         bool special = false;   // B pressed this frame
         bool shield = false;    // held
+        bool final_smash = false;
     };
 
     struct Fighter
@@ -338,6 +348,7 @@ namespace battle
         int hp = 0;
         int shield = SHIELD_MAX;
         bool shield_locked = false; // the shield broke and is still recharging
+        int smash = 0;
         int state = ST_AIR;
         int timer = 0;              // frames left of a flinch
         int drop_timer = 0;
@@ -441,7 +452,41 @@ namespace battle
         unsigned rng = 1;
         int frame = 0;
         int winner = -1;            // -1 = still fighting, 0 = the player won, 1 = the opponent won
+        int pending_final_smash = -1;
+        int pending_final_smash_victim = -1;
+        int pending_final_smash_id = FS_NONE;
+        int debug_ai_mode = DBG_AI_NORMAL;
+        int debug_force_slot = SLOT_SPECIAL;
+        int debug_cd = 0;
         int next_projectile_id = 0;
+
+        void apply_final_smash_hit(int attacker_idx, int victim_idx, int damage, int kb_x, int kb_y, int stun)
+        {
+            ev = Events();
+            for(int i = 0; i < count; ++i)
+            {
+                release_grab(i);
+                cancel_move(f[i]);
+                if(f[i].state != ST_KO) { f[i].state = f[i].on_ground ? ST_IDLE : ST_AIR; }
+            }
+            for(Projectile& p : proj) { p.active = false; }
+
+            Fighter& attacker = f[attacker_idx];
+            Fighter& victim = f[victim_idx];
+            if(victim.state == ST_KO) { return; }
+
+            int dir = sign_i(victim.x16 - attacker.x16);
+            if(dir == 0) { dir = attacker.facing; }
+            attacker.facing = dir;
+
+            if(victim.state == ST_SHIELD) { victim.state = ST_IDLE; }   // Final Smashes break through guard
+
+            hit(victim, damage, kb_x, kb_y, stun, dir, victim.x16, victim.y16 - (victim.stats->body_h * FP) / 2, nullptr);
+            if(victim.hp <= 0 && winner < 0)
+            {
+                winner = team_of(attacker_idx) == 0 ? 0 : 1;
+            }
+        }
 
         // `partner` (optional) is a computer-controlled fighter on the PLAYER's side: a 2 against 1 fight.
         // The stats are only pointed at, not copied: they have to stay alive for the whole fight.
@@ -454,6 +499,12 @@ namespace battle
             if(rng == 0) { rng = 1; }
             frame = 0;
             winner = -1;
+            pending_final_smash = -1;
+            pending_final_smash_victim = -1;
+            pending_final_smash_id = FS_NONE;
+            debug_ai_mode = DBG_AI_NORMAL;
+            debug_force_slot = SLOT_SPECIAL;
+            debug_cd = 0;
             next_projectile_id = 0;
             for(Projectile& p : proj) { p = Projectile(); }
             for(Effect& e : fx) { e = Effect(); }
@@ -487,18 +538,33 @@ namespace battle
         void step(const Input* in)
         {
             ev = Events();
-
-            for(int i = 0; i < count; ++i) { update_fighter(i, in[i]); } // movement, starting moves, flying, firing
-            resolve_melee();                                            // did any hitbox touch anybody?
-            for(int i = 0; i < count; ++i) { advance_move(i); }          // the move's clock ticks
-            update_grabs();                                             // whoever is held stays in front of the grabber
+            for(int i = 0; i < count; ++i)
+            {
+                update_fighter(i, in[i]);
+                if(pending_final_smash >= 0) { return; }   // pause frame immediately for cutscene
+            }
+            resolve_melee();
+            if(pending_final_smash >= 0) { return; }
+            for(int i = 0; i < count; ++i) { advance_move(i); }
+            update_grabs();
             update_projectiles();
             for(Effect& e : fx) { if(e.active && ++e.age >= e.life) { e.active = false; } }
             ++frame;
 
+            if(winner < 0 && frame % SMASH_PASSIVE_FRAMES == 0)
+            {
+                for(int i = 0; i < count; ++i)
+                {
+                    if(f[i].stats->final_smash_move != nullptr && f[i].state != ST_KO && f[i].smash < SMASH_MAX)
+                    {
+                        ++f[i].smash;
+                    }
+                }
+            }
+
             if(winner < 0)
             {
-                if(f[0].hp <= 0)      { winner = 1; }              // (if both fall on the same frame, the player loses)
+                if(f[0].hp <= 0)      { winner = 1; }
                 else if(f[1].hp <= 0) { winner = 0; }
                 else if(frame >= TIME_LIMIT) { winner = f[0].hp > f[1].hp ? 0 : 1; }
             }
@@ -567,6 +633,66 @@ namespace battle
             Ai& brain = ai[self];
             if(winner >= 0 || me.state == ST_KO) { return in; }
 
+            if(self == 1 && debug_ai_mode == DBG_AI_IDLE)
+            {
+                return in;
+            }
+            if(self == 1 && debug_ai_mode == DBG_AI_FORCE)
+            {
+                const bool can_act_dbg = me.state == ST_IDLE || me.state == ST_WALK || me.state == ST_AIR;
+                if(!can_act_dbg) { return in; }
+                if(debug_cd > 0) { --debug_cd; return in; }
+
+                const int toward_dbg = op.x16 >= me.x16 ? 1 : -1;
+                if(debug_force_slot == SLOT_COUNT)
+                {
+                    if(!me.stats->final_smash_move || op.state == ST_KO) { return in; }
+                    if(me.smash < SMASH_MAX) { f[self].smash = SMASH_MAX; }
+                    const int adx_dbg = abs_i(op.x16 - me.x16) / FP;
+                    if(adx_dbg > 44 || me.facing != toward_dbg) { in.move = toward_dbg; return in; }
+                    in.final_smash = true;
+                    debug_cd = 25;
+                    return in;
+                }
+
+                const int slot = debug_force_slot;
+                if(!has_move(*me.stats, slot)) { return in; }
+
+                const bool is_aerial = slot >= SLOT_NAIR && slot <= SLOT_DAIR;
+                if(is_aerial && me.on_ground)
+                {
+                    in.jump = true;
+                    return in;
+                }
+
+                const int wanted_face = (slot == SLOT_BAIR) ? -toward_dbg : toward_dbg;
+                if(me.facing != wanted_face && slot != SLOT_SPECIAL_SIDE && slot != SLOT_FSMASH)
+                {
+                    in.move = wanted_face;
+                    return in;
+                }
+
+                switch(slot)
+                {
+                    case SLOT_SPECIAL:      in.special = true; break;
+                    case SLOT_SPECIAL_SIDE: in.special = true; in.move = toward_dbg; break;
+                    case SLOT_SPECIAL_UP:   in.special = true; in.up = true; break;
+                    case SLOT_SPECIAL_DOWN: in.special = true; in.down = true; break;
+                    case SLOT_JAB:          in.attack = true; break;
+                    case SLOT_FSMASH:       in.attack = true; in.move = toward_dbg; break;
+                    case SLOT_USMASH:       in.attack = true; in.up = true; break;
+                    case SLOT_DSMASH:       in.attack = true; in.down = true; break;
+                    case SLOT_NAIR:         in.attack = true; break;
+                    case SLOT_FAIR:         in.attack = true; in.move = me.facing; break;
+                    case SLOT_BAIR:         in.attack = true; in.move = -me.facing; break;
+                    case SLOT_UAIR:         in.attack = true; in.up = true; break;
+                    case SLOT_DAIR:         in.attack = true; in.down = true; break;
+                    default: break;
+                }
+                debug_cd = 22;
+                return in;
+            }
+
             const FighterStats& s = *me.stats;
             const int dx = (op.x16 - me.x16) / FP;            // + = the opponent is on my right
             const int dy = (op.y16 - me.y16) / FP;            // + = the opponent is below me
@@ -577,6 +703,17 @@ namespace battle
 
             // falling through a platform means holding DOWN for a few frames
             if(brain.drop_hold > 0) { --brain.drop_hold; in.down = true; return in; }
+
+            // 0. If Final Smash is ready and within range, activate it!
+            if(can_act && s.final_smash_move && me.smash >= SMASH_MAX && op.state != ST_KO && adx < 52 && ady < 32)
+            {
+                if(me.facing != toward) { in.move = toward; return in; }
+                if(random_below(100) < 35 + s.ai_skill / 2)
+                {
+                    in.final_smash = true;
+                    return in;
+                }
+            }
 
             // 1. is a shot coming at me? decide ONCE per shot whether to react (the better the skill, the more often)
             const Projectile* threat = nullptr;
@@ -651,7 +788,8 @@ namespace battle
                 brain.mode_timer = 90 + random_below(150);
                 brain.rush = random_below(100) < 30 + s.ai_skill / 3;
             }
-            const int wanted_range = brain.rush ? 22 : 105;
+            const bool seeking_fs = me.stats->final_smash_move != nullptr && me.smash >= SMASH_MAX;
+            const int wanted_range = seeking_fs ? 18 : (brain.rush ? 22 : 105);
             if(--brain.strafe_timer <= 0)
             {
                 brain.strafe_timer = 25 + random_below(50);
@@ -721,7 +859,8 @@ namespace battle
             // 5. get to a different height
             if(!in.attack && !in.special)
             {
-                if(me.on_ground && dy < -36 && random_below(100) < 5)                        { in.jump = true; }
+                if(seeking_fs && me.on_ground && dy < -24 && random_below(100) < 12) { in.jump = true; }
+                else if(me.on_ground && dy < -36 && random_below(100) < 5)                        { in.jump = true; }
                 else if(me.on_ground && me.support >= 0 && dy > 36 && random_below(100) < 4) { brain.drop_hold = DROP_HOLD + 2; in.down = true; }
                 else if(me.on_ground && random_below(1000) < 4)                              { in.jump = true; }
             }
@@ -747,6 +886,7 @@ namespace battle
             rng ^= rng << 5;
             return int(rng % unsigned(limit));
         }
+        
 
         static int approach(int value, int target, int amount)
         {
@@ -759,7 +899,6 @@ namespace battle
         {
             return Rect{ t.x16 / FP, t.y16 / FP - t.stats->body_h / 2, t.stats->body_w, t.stats->body_h };
         }
-
         void update_fighter(int i, const Input& raw)
         {
             Fighter& p = f[i];
@@ -787,7 +926,15 @@ namespace battle
             if(free_state)
             {
                 bool started = false;
-                if((in.attack || in.special) && p.state != ST_SHIELD) { started = try_start_move(p, in); }
+                if(in.final_smash && s.final_smash_move && p.smash >= SMASH_MAX)
+                {
+                    p.smash = 0;
+                    if(in.move != 0) { p.facing = in.move; }
+                    begin_move(p, s.final_smash_move, true);
+                    if(s.final_smash_move->hit_count > 0 || s.final_smash_move->drive.end > s.final_smash_move->drive.start) { ev.swing = true; }
+                    started = true;
+                }
+                else if((in.attack || in.special) && p.state != ST_SHIELD) { started = try_start_move(p, in); }
 
                 if(!started)
                 {
@@ -981,7 +1128,8 @@ namespace battle
             if(p.state != ST_ATTACK || !p.move) { return; }
             if(++p.move_frame >= p.move->duration)
             {
-                if(p.driving) { p.vx = p.vx * DRIVE_EXIT_PERCENT / 100; p.vy = p.vy * DRIVE_EXIT_PERCENT / 100; }
+                                if(p.driving) { p.vx = p.vx * DRIVE_EXIT_PERCENT / 100; p.vy = p.vy * DRIVE_EXIT_PERCENT / 100; }
+                if(p.move->flags & MF_ORBIT_HELD) { p.has_stored = false; }
                 p.driving = false;
                 p.move = nullptr;
                 p.state = p.on_ground ? ST_IDLE : ST_AIR;
@@ -1100,6 +1248,7 @@ namespace battle
 
         void update_projectiles()
         {
+            
             for(Projectile& pr : proj)
             {
                 if(!pr.active) { continue; }
@@ -1153,9 +1302,9 @@ namespace battle
                     if(overlaps(box, body))
                     {
                         int dir = sign_i(pr.vx);
-                        if(dir == 0) { dir = sign_i(target.x16 - pr.x16); }   // an explosion pushes away from its middle
+                        if(dir == 0) { dir = sign_i(target.x16 - pr.x16); }
                         if(dir == 0) { dir = f[pr.owner].facing; }
-                        hit(target, sh.damage, sh.kb_x, sh.kb_y, sh.hitstun, dir, pr.x16, pr.y16);
+                        hit(target, sh.damage, sh.kb_x, sh.kb_y, sh.hitstun, dir, pr.x16, pr.y16, &f[pr.owner]);
                         if(sh.boom > 0) { spawn_boom(pr.owner, pr.x16, pr.y16, sh.boom); }
                         if(sh.persist) { pr.hit_done = true; } else { pr.active = false; }
                     }
@@ -1217,8 +1366,10 @@ namespace battle
                 if(ph.box.grab) { grab_connects(ph.attacker, ph.victim); continue; }
 
                 // Filip's counter: a melee hit that lands inside the counter window is caught and answered
+                const int fs_id = (attacker.move && attacker.move->final_smash != FS_NONE) ? attacker.move->final_smash : FS_NONE;
+
                 const Move* vm = victim.move;
-                if(vm && vm->on_counter_melee && in_window(victim, vm->counter_start, vm->counter_end))
+                if(fs_id == FS_NONE && vm && vm->on_counter_melee && in_window(victim, vm->counter_start, vm->counter_end))
                 {
                     counter_melee(ph.victim, ph.attacker);
                     continue;
@@ -1226,15 +1377,27 @@ namespace battle
 
                 const int damage = buffed_damage(attacker, ph.box.damage);
 
-                // a scratch on somebody who is held: damage only, they stay held
                 if(ph.box.keep_grab && victim.grabbed_by == ph.attacker)
                 {
-                    scratch(victim, damage, ph.box.kb_x, ph.box.kb_y, ph.dir);
+                    scratch(victim, damage, ph.box.kb_x, ph.box.kb_y, ph.dir, fs_id != FS_NONE ? nullptr : &attacker);
                     spawn_effect(FX_SPARK, ph.sx16, ph.sy16, 10);
                     continue;
                 }
 
-                hit(victim, damage, ph.box.kb_x, ph.box.kb_y, ph.box.hitstun, ph.dir, ph.sx16, ph.sy16);
+                int applied_dmg = damage;
+                if(fs_id != FS_NONE)
+                {
+                    if(victim.state == ST_SHIELD) { victim.state = ST_IDLE; }
+                    if(victim.hp <= applied_dmg) { applied_dmg = victim.hp > 1 ? victim.hp - 1 : 0; }
+                }
+
+                hit(victim, applied_dmg, ph.box.kb_x, ph.box.kb_y, ph.box.hitstun, ph.dir, ph.sx16, ph.sy16, fs_id != FS_NONE ? nullptr : &attacker);
+                if(fs_id != FS_NONE && pending_final_smash < 0)
+                {
+                    pending_final_smash = ph.attacker;
+                    pending_final_smash_victim = ph.victim;
+                    pending_final_smash_id = fs_id;
+                }
                 if(ph.box.pogo > 0) { pogo(attacker, ph.box.pogo); }
             }
         }
@@ -1334,12 +1497,22 @@ namespace battle
         }
 
         // damage to somebody who stays held (the three scratches). If it would knock them out, it is a normal hit.
-        void scratch(Fighter& t, int damage, int kb_x, int kb_y, int dir)
+        void scratch(Fighter& t, int damage, int kb_x, int kb_y, int dir, Fighter* attacker = nullptr)
         {
             int dealt = damage * (100 - t.stats->defense) / 100;
             if(dealt < 1) { dealt = 1; }
-            if(t.hp - dealt <= 0) { hurt(t, damage, kb_x, kb_y, 0, dir); return; }
+            if(t.hp - dealt <= 0) { hurt(t, damage, kb_x, kb_y, 0, dir, attacker); return; }
             t.hp -= dealt;
+            if(attacker && attacker != &t && attacker->stats->final_smash_move != nullptr && attacker->smash < SMASH_MAX)
+            {
+                attacker->smash += dealt * SMASH_HIT_GAIN;
+                if(attacker->smash > SMASH_MAX) { attacker->smash = SMASH_MAX; }
+            }
+            if(t.stats->final_smash_move != nullptr && t.smash < SMASH_MAX)
+            {
+                t.smash += dealt * SMASH_HURT_GAIN;
+                if(t.smash > SMASH_MAX) { t.smash = SMASH_MAX; }
+            }
             ev.hit = true;
         }
 
@@ -1394,9 +1567,9 @@ namespace battle
             }
         }
 
-        void hit(Fighter& t, int damage, int kb_x, int kb_y, int stun, int dir, int sx16, int sy16)
+        void hit(Fighter& t, int damage, int kb_x, int kb_y, int stun, int dir, int sx16, int sy16, Fighter* attacker = nullptr)
         {
-            hurt(t, damage, kb_x, kb_y, stun, dir);
+            hurt(t, damage, kb_x, kb_y, stun, dir, attacker);
             spawn_effect(FX_SPARK, sx16, sy16, 10);
         }
 
@@ -1413,7 +1586,7 @@ namespace battle
         }
 
         // Damage goes through the defenses. A shield removes a LOT of it, but the boost fades as the shield drains.
-        void hurt(Fighter& t, int damage, int kb_x, int kb_y, int stun, int dir)
+        void hurt(Fighter& t, int damage, int kb_x, int kb_y, int stun, int dir, Fighter* attacker = nullptr)
         {
             const FighterStats& s = *t.stats;
             clear_grab_of(t);
@@ -1424,6 +1597,17 @@ namespace battle
 
             int dealt = damage * (100 - reduction) / 100;
             if(dealt < 1 && damage > 0) { dealt = 1; }                    // there is always a little chip damage (a 0 damage hit only stuns)
+
+            if(attacker && attacker != &t && attacker->stats->final_smash_move != nullptr && attacker->smash < SMASH_MAX)
+            {
+                attacker->smash += dealt * SMASH_HIT_GAIN;
+                if(attacker->smash > SMASH_MAX) { attacker->smash = SMASH_MAX; }
+            }
+            if(t.hp - dealt > 0 && t.stats->final_smash_move != nullptr && t.smash < SMASH_MAX)
+            {
+                t.smash += dealt * SMASH_HURT_GAIN;
+                if(t.smash > SMASH_MAX) { t.smash = SMASH_MAX; }
+            }
 
             // super armor: a hit that is not strong enough neither flinches nor launches. A strong one breaks through.
             const Move* tm = t.move;
@@ -1441,6 +1625,7 @@ namespace battle
             {
                 t.hp = 0;
                 cancel_move(t);
+                t.has_stored = false;
                 t.state = ST_KO;
                 t.timer = 0;
                 launch(t, kb_x, kb_y, dir);                               // the final blow sends them flying too
@@ -1465,6 +1650,12 @@ namespace battle
 
         static void cancel_move(Fighter& t)
         {
+            if(t.has_stored &&
+               ((t.move && (t.move->flags & MF_ORBIT_HELD)) ||
+                !t.stats || !t.stats->moves || !t.stats->moves->slot[SLOT_SPECIAL_DOWN] || !t.stats->moves->slot[SLOT_SPECIAL_DOWN]->alt))
+            {
+                t.has_stored = false;
+            }
             t.move = nullptr;
             t.move_frame = 0;
             t.driving = false;

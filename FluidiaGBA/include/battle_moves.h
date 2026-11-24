@@ -121,6 +121,12 @@ namespace battle
     // WHO KNOWS WHICH MOVES. A new character gets its own MoveSet (leave a slot out = no such move).
     // ============================================================================================
 
+    // SELECT (when Final Smash is ready): lunging uppercut. If it hits, starts Fire Blast!
+    constexpr Move waffle_fs_start = Move("Fire Uppercut", 32, ANIM_TAIL_UP)
+        .dash(Drive().frames(4, 13).speed(fp(3.8), fp(-1.2)).stops_on_hit())
+        .hit(Hitbox().frames(5, 14).at(16, 16).size(24, 28).dmg(6).launch(0, fp(-3.5)).stun(22))
+        .starts_final_smash(FS_WAFFLE_FIRE);
+
     constexpr MoveSet waffle_moveset = MoveSet()
         .set(SLOT_SPECIAL,      &water_gun)         // B
         .set(SLOT_SPECIAL_SIDE, &aqua_jet)          // B + left/right
@@ -196,11 +202,11 @@ namespace battle
     //      The laptop explodes when it touches somebody (or the floor). ---- mmm explosion
     constexpr Shot junk[] =
     {
-        Shot().dmg(3).arc(fp(2.2), -fp(4.2), 3, 90).size(12, 5).spawn(6, 24).launch(fp(1.2), fp(-1.0)).stun(12).labeled("PENCIL"), // no sprites yet, im too lazy
-        Shot().dmg(4).arc(fp(1.8), -fp(4.4), 3, 90).size(9, 9).spawn(6, 24).launch(fp(1.5), fp(-1.5)).stun(14).labeled("APPLE"),
-        Shot().dmg(8).arc(fp(1.5), -fp(4.6), 4, 90).size(18, 6).spawn(6, 24).launch(fp(3.5), fp(-2.5)).stun(18).labeled("BAT"),
-        Shot().dmg(3).arc(fp(1.6), -fp(4.6), 4, 90).size(14, 10).spawn(6, 24).launch(fp(1.0), fp(-1.0)).stun(10).explodes(9).labeled("LAPTOP"),
-        Shot().dmg(12).arc(fp(1.2), -fp(4.2), 4, 90).size(12, 12).spawn(6, 24).launch(fp(4.0), fp(-3.0)).stun(24).labeled("BALL"),
+        Shot().dmg(3).arc(fp(2.2), -fp(4.2), 3, 90).size(12, 5).spawn(6, 24).launch(fp(1.2), fp(-1.0)).stun(12).of(PROJ_JUNK_PENCIL), // no sprites yet, im too lazy
+        Shot().dmg(4).arc(fp(1.8), -fp(4.4), 3, 90).size(9, 9).spawn(6, 24).launch(fp(1.5), fp(-1.5)).stun(14).of(PROJ_JUNK_APPLE),
+        Shot().dmg(8).arc(fp(1.5), -fp(4.6), 4, 90).size(18, 6).spawn(6, 24).launch(fp(3.5), fp(-2.5)).stun(18).of(PROJ_JUNK_BAT),
+        Shot().dmg(3).arc(fp(1.6), -fp(4.6), 4, 90).size(14, 10).spawn(6, 24).launch(fp(1.0), fp(-1.0)).stun(10).explodes(9).of(PROJ_JUNK_LAPTOP),
+        Shot().dmg(12).arc(fp(1.2), -fp(4.2), 4, 90).size(12, 12).spawn(6, 24).launch(fp(4.0), fp(-3.0)).stun(24).of(PROJ_JUNK_BALL),
     };
     constexpr Move throw_junk = Move("Throw Junk", 40, ANIM_SNEP_THROW_UP)
         .fires_random(10, junk, 5);
