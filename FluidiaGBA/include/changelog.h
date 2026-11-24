@@ -5,6 +5,9 @@ namespace phone
 {
     constexpr const char* changelog_entries[] =
     {
+        "0.4.2p: Almost Finshed adding Filip as a fighter.",
+        "0.4.1p: Working on Filip as a fighter.",
+        "0.4.0p: Finished Waffles as fighter.",
         "0.3.9p: Added more sprites and moveset to Waffles.",
         "0.3.8p: Fixed the Background music getting fucked up when three audio plays at once.",
         "0.3.7p: Added a third map to test the Map specific Battle field",

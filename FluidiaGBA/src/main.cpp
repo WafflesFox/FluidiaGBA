@@ -1,4 +1,4 @@
-#define GAME_VER "0.3.9p"
+#define GAME_VER "0.4.2p"
 #include "bn_core.h"
 #include "bn_color.h"
 #include "bn_bg_palettes.h"
@@ -168,13 +168,28 @@ namespace
             case 10:
                 bn::sound_items::gay.play();
                 break;
+            case 11:
+                bn::sound_items::critical.play();
+                break;
+            case 12:
+                bn::sound_items::shieldon.play();
+                break;
+            case 13:
+                bn::sound_items::slam.play();
+                break;
+            case 14:
+                bn::sound_items::slam2.play();
+                break;
+            case 15:
+                bn::sound_items::yoink.play();
+                break;
             default:
                 bn::sound_items::meow.play();
                 break;
         }
     }
 
-    void enlarge(bn::ivector<bn::sprite_ptr>& sprites, bn::fixed center_y, bn::fixed scale) // this function was helped made by Claude AI
+    void enlarge(bn::ivector<bn::sprite_ptr>& sprites, bn::fixed center_y, bn::fixed scale) // this is a pre-built function to enlarge da text
     {
         bn::sprite_affine_mat_ptr mat = bn::sprite_affine_mat_ptr::create();
         mat.set_scale(scale);
@@ -472,6 +487,28 @@ namespace
         TRAIT_PLAYFUL   = 1 << 5,
     };
 
+    // ---- BATTLE BUFFS ----
+    // A follower WITHOUT fighting data can't join a battle, but it stands by and gives you a small bonus from its traits.
+    // All numbers are percents; a follower with two traits gives both. Tune them here, nothing else has to change.
+    constexpr int BUFF_LAZY_PHYS       = 20;   // Lazy:      your A moves (slaps, smashes, aerials) hit 20% harder
+    constexpr int BUFF_SPEEDY_SPEED    = 15;   // Speedy:    you walk 15% faster
+    constexpr int BUFF_INTROVERT_DEF   = 10;   // Introvert: 10% of all damage you take is removed (on top of your own defense)
+    constexpr int BUFF_EXTROVERT_MAGIC = 20;   // Extrovert: your B moves (water gun, aqua jets) hit 20% harder
+    constexpr int BUFF_WALKER_JUMP     = 6;    // Walker:    you jump 6% faster off the ground (about 12% higher)
+    constexpr int BUFF_PLAYFUL_DAMAGE  = 10;   // Playful:   a little more of BOTH A and B damage
+
+    battle::Buff buff_from_traits(int traits)
+    {
+        battle::Buff b;
+        if(traits & TRAIT_LAZY)      { b.phys_pct  += BUFF_LAZY_PHYS; }
+        if(traits & TRAIT_SPEEDY)    { b.speed_pct += BUFF_SPEEDY_SPEED; }
+        if(traits & TRAIT_INTROVERT) { b.defense   += BUFF_INTROVERT_DEF; }
+        if(traits & TRAIT_EXTROVERT) { b.magic_pct += BUFF_EXTROVERT_MAGIC; }
+        if(traits & TRAIT_WALKER)    { b.jump_pct  += BUFF_WALKER_JUMP; }
+        if(traits & TRAIT_PLAYFUL)   { b.phys_pct  += BUFF_PLAYFUL_DAMAGE; b.magic_pct += BUFF_PLAYFUL_DAMAGE; }
+        return b;
+    }
+
     // one answer the player can pick
     struct Choice
     {
@@ -526,6 +563,7 @@ namespace
         SNEP_MENU,
         SNEP_FOLLOW_Q, SNEP_FOLLOW_YES, SNEP_CONCERN,SNEP_FOLLOW_NO,
         SNEP_STOP_Q, SNEP_STOP_YES, SNEP_STOP_NO,
+        SNEP_FIGHT,
     };
 
     enum FoxNode
@@ -546,7 +584,7 @@ namespace
     };
 
     constexpr Choice snep_okay_choices[]   = { { "Yes", SNEP_OKAY_YES }, { "Not really", SNEP_OKAY_NO } };
-    constexpr Choice snep_menu_choices[]   = { { "Follow me", SNEP_FOLLOW_Q }, { "Nothing", DLG_END } };
+    constexpr Choice snep_menu_choices[]   = { { "Follow me", SNEP_FOLLOW_Q }, {"Fight",SNEP_FIGHT},{ "Nothing", DLG_END } };
     constexpr Choice snep_follow_choices[] = { { "Yes", SNEP_FOLLOW_YES }, { "No", SNEP_FOLLOW_NO } };
     constexpr Choice snep_stop_choices[]   = { { "Wait here", SNEP_STOP_YES }, { "Keep going", SNEP_STOP_NO } };
     
@@ -580,6 +618,7 @@ namespace
         /* SNEP_STOP_Q     */ ask("Want me to wait here?", snep_stop_choices),
         /* SNEP_STOP_YES   */ say("Okay, I'll wait here.", DLG_END, ACT_STOP_FOLLOW, SNEP_MENU),
         /* SNEP_STOP_NO    */ say("Okay, lets go!"),
+                              say("Aight, lets train :3", DLG_END, ACT_BATTLE),
     };
 
     constexpr DialogueNode fox_nodes[]=
@@ -636,13 +675,28 @@ namespace
         {
             240,                                                         // max HP
             battle::fp(2.0), battle::fp(0.6), battle::fp(0.2), battle::fp(0.35),   // walk speed, ground accel, air accel, friction
-            88, 80, 2,                                                   // jump power, double jump power, jumps (2 = a double jump)
+            88, 88, 2,                                                   // jump power, double jump power, jumps (2 = a double jump)
             5, 112, 144,                                                 // gravity, fall speed, fast-fall speed
             14, 26,                                                      // hurtbox width and height, in pixels
             0,                                                           // defense: % of damage that is ALWAYS removed
-            100,                                                          // computer skill 0..100 (only used when the computer is this fighter)
+            60,                                                          // computer skill 0..100 (only used when the computer is this fighter)
             &battle::waffle_moveset,                                     // the moveset
         },
+    };
+    constexpr battle::FighterDef snep_fighter =
+    {
+        "Filip",
+        &bn::sprite_items::snep,
+        {
+            450,
+            battle::fp(1.3), battle::fp(0.5),battle::fp(0.5),battle::fp(0.2),
+            90,88,2,
+            7,140,190,
+            14,28,
+            10,
+            70,
+            &battle::snep_moveset,
+        }
     };
 
     // TO ADD AN NPC:
@@ -653,7 +707,7 @@ namespace
     constexpr NpcDef npc_defs[] =
     {
         //  name       sprite                    map        x                        y                     wander    traits          nodes       start
-        { "Filip:",  &bn::sprite_items::snep,  MAP_WORLD, world::pixel_w / 2 + 88, world::pixel_h / 2 + 8,  48 * T,   TRAIT_EXTROVERT, snep_nodes, SNEP_BABE },
+        { "Filip:",  &bn::sprite_items::snep,  MAP_WORLD, world::pixel_w / 2 + 88, world::pixel_h / 2 + 8,  48 * T,   TRAIT_EXTROVERT, snep_nodes, SNEP_BABE, &snep_fighter},
         { "Waffles:", &bn::sprite_items::waffle, MAP_WORLD, world::pixel_w/2 + 50, world::pixel_h/2 + 10, 90 * T, TRAIT_PLAYFUL | TRAIT_INTROVERT, fox_nodes, FOX_CLONE, &waffle_fighter},
         { "Umbreon:", &bn::sprite_items::umbreon, MAP_WORLD2, world::pixel_w/2 + 50, world::pixel_h/2 + 30, 30 * T, TRAIT_WALKER | TRAIT_PLAYFUL, umb_nodes, UMB_START},
     };
@@ -812,6 +866,24 @@ namespace
     bool bumps(int cx, int cy, int nx, int ny, int ox, int oy)
     {
         return boxes_touch(nx, ny, ox, oy) && !boxes_touch(cx, cy, ox, oy);
+    }
+
+    // ---- WHO COMES ALONG TO A BATTLE ----
+    // If NPCs are following you when a battle starts, only ONE of them takes part:
+    //   - one with fighting data joins your side (2 against 1)
+    //   - one without it can't fight, so it just gives you a buff from its traits (see buff_from_traits)
+    // With several followers, the first one that CAN fight is taken; if none can, the first one in the npc_defs table.
+    // The NPC you are fighting is never picked (it can't be on both sides). Returns an NPC id, or -1 for nobody.
+    // (Call it BEFORE park_npcs: that empties the list.)
+    int pick_companion(const bn::ivector<Npc>& npcs, int foe_id)
+    {
+        int best = -1;
+        for(const Npc& n : npcs)
+        {
+            if(!n.following || n.id == foe_id) { continue; }
+            if(best < 0 || (!npc_defs[best].fight && n.def->fight)) { best = n.id; }
+        }
+        return best;
     }
 
     // would the player, stepping from (cx, cy) to (nx, ny), run into an NPC?
@@ -1292,9 +1364,13 @@ namespace
                 const unsigned ev = battle_ui.events;                   // sound effects: change these numbers to your own sounds
                 if(ev & battle::EV_SHOT) { sfx(7); }
                 if(ev & battle::EV_HIT)  { sfx(4); }
-                if(ev & battle::EV_KO)   { sfx(6); sfx(10);}
+                if(ev & battle::EV_KO)   { sfx(6); sfx(11);}
                 if(ev & battle::EV_BLOCKED) {sfx(8);}
                 if(ev & battle::EV_FIGHT) {sfx(9);}
+                if(ev & battle::EV_SWING) {sfx(7);}
+                if(ev & battle::EV_ABSORB) {sfx(15);}
+                if(ev & battle::EV_BOOM) {sfx(13);}
+                if(ev & battle::EV_SMASH){sfx(5);}
 
                 if(!battle_ui.active())                                 // it just ended: the black blocks cover the screen again
                 {
@@ -1452,13 +1528,25 @@ namespace
                     {
                         trans_pos = 0;                                // the screen is fully covered: this wipe was for a battle
                         const NpcDef& foe = npc_defs[battle_npc];
+
+                        const int companion = pick_companion(npcs, battle_npc);        // a follower tags along (before park_npcs empties the list)
+                        const battle::FighterDef* partner = nullptr;                    // can fight: joins your side
+                        battle::Buff buff;                                              // can't fight: gives a bonus from its traits...
+                        const bn::sprite_item* bystander = nullptr;                     // ...and wanders around the stage while you fight
+                        if(companion >= 0)
+                        {
+                            const NpcDef& friend_def = npc_defs[companion];
+                            if(friend_def.fight) { partner = friend_def.fight; }
+                            else                 { buff = buff_from_traits(friend_def.traits); bystander = friend_def.sprite_item; }
+                        }
+
                         ground_bg.reset();                            // the battle needs those background slots
                         top_bg.reset();
                         waffle.set_visible(false);                    // hide the overworld
                         park_npcs(npcs);                              // free the NPC sprites too: the battle needs their video memory
                         text_sprites.clear();
                         music.play(battle_music(current_map));
-                        battle_ui.start(waffle_fighter, *foe.fight, map_stage(current_map), blocks, text, unsigned(random_int(60000) + 1));
+                        battle_ui.start(waffle_fighter, *foe.fight, map_stage(current_map), blocks, text, unsigned(random_int(60000) + 1), partner, buff, bystander);
                         battle_npc = -1;
                         trans_phase = 0;                              // the battle owns the black blocks now
                     }

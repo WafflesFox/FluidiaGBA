@@ -1,6 +1,6 @@
 #ifndef BATTLE_LOGIC_H
 #define BATTLE_LOGIC_H
-// THE RULES OF THE BATTLE (plain C++: nothing from Butano in here, so it can be tested on a PC)
+// THE RULES OF THE BATTLE (plain C++)
 //
 //   A = normal attacks (jab, smashes, aerials)      B = special attacks (water gun, aqua jets, fox thief)
 //   D-PAD + A or B picks the move.  R = jump.  L = shield.
@@ -11,7 +11,6 @@
 //   - a drive      (the fighter flies: aqua jet)                -> Drive
 //   - a shot       (something that flies away: water gun)       -> Shot
 //   - an absorb    (catches enemy shots: fox thief)
-// Nothing in this file knows what a "tail slam" is. To add a move you only write data.
 
 namespace battle
 {
@@ -31,7 +30,7 @@ namespace battle
     constexpr int DROP_FRAMES = 12;             // how long you fall through a platform
     constexpr int DROP_HOLD = 6;                // ...after holding DOWN this many frames (a quick DOWN + A/B is a down move instead)
     constexpr int BODY_MARGIN = 8;              // how close to the edge of the stage a fighter can stand
-    constexpr int TIME_LIMIT = 60 * 90;         // 90 seconds, then whoever has more HP wins
+    constexpr int TIME_LIMIT = 60 * 300;         // 90 seconds, then whoever has more HP wins
     constexpr int KB_HP_BONUS = 60;             // KNOCKBACK: hits send you this many % further when you are almost dead
     constexpr int DRIVE_EXIT_PERCENT = 25;      // speed that is kept when a dash ends (the rest is thrown away so you don't keep sliding)
     constexpr int ABSORB_MARGIN = 6;            // fox thief catches shots this many pixels outside the body too
@@ -39,6 +38,10 @@ namespace battle
     constexpr int MAX_PLATFORMS = 6;
     constexpr int MAX_HITBOXES = 4;             // per move (raise it if a move needs more)
     constexpr int MAX_EFFECTS = 4;              // hit sparks on screen at once
+    constexpr int PARTNER_SPACING = 24;         // a partner starts this many pixels behind the player
+    constexpr int GRAB_DISTANCE = 16;           // a grabbed fighter is held this many pixels in front of the one who grabbed
+    constexpr int GRAB_RELEASE_STUN = 14;       // a grabbed fighter that is let go without a hit (the grabber was interrupted)
+    constexpr int POGO_RECOVERY = 10;           // frames of a move that are left after it bounced off somebody (pogo)
 
     // ============================================================================================
     // DATA: what a move is, what a fighter is, what a stage is
@@ -52,7 +55,10 @@ namespace battle
     enum
     {
         ANIM_STAND, ANIM_SLAP, ANIM_TAIL, ANIM_TAIL_UP, ANIM_KICK, ANIM_SPIN, ANIM_SLAM,
-        ANIM_SHOOT, ANIM_JET_SIDE, ANIM_JET_UP, ANIM_JET_DOWN, ANIM_STANCE,
+        ANIM_SHOOT, ANIM_JET_SIDE, ANIM_JET_UP, ANIM_JET_DOWN, ANIM_STANCE, ANIM_RTS, ANIM_SNEP_PUNCH,
+        // Filip (snep)
+        ANIM_SNEP_JAB, ANIM_SNEP_HEAVY, ANIM_SNEP_FLIP, ANIM_SNEP_DSMASH, ANIM_SNEP_COUNTER, ANIM_SNEP_COUNTER_GRAB,
+        ANIM_SNEP_SPIN_THROW, ANIM_SNEP_THROW_UP, ANIM_SNEP_LEAP, ANIM_SNEP_SCRATCH, ANIM_SNEP_DAIR,
     };
 
     // Every button + direction combination is a SLOT. A fighter's MoveSet says which move sits in each slot.
@@ -70,6 +76,7 @@ namespace battle
         MF_AIR_ONCE     = 1u << 0,      // can only be used once per jump (so up-specials can't be chained to fly away)
         MF_FIRE_ON_LAND = 1u << 1,      // the move's shot is fired when the fighter touches the ground (the dair explosion)
         MF_USE_STORED   = 1u << 2,      // the move's shot is the one fox thief stole, not its own
+        MF_ORBIT_HELD   = 1u << 3,      // the stolen shot is drawn spinning around the fighter until it is thrown (battle.h)
     };
 
     // A melee hit. Every hitbox of a move can hit the opponent ONCE per use of the move.
@@ -84,6 +91,10 @@ namespace battle
         int damage = 1;
         int kb_x = 0, kb_y = 0;     // launch speed (fp). kb_x pushes AWAY from the attacker. kb_y: negative = up, positive = down
         int hitstun = 0;            // frames the victim can't act (0 = HURT_FRAMES)
+        bool grab = false;          // instead of damage, this hitbox GRABS the victim (the move's on_grab move takes over)
+        bool keep_grab = false;     // on a victim that is grabbed: damage only, they stay held (the scratches)
+        int pogo = 0;               // >0: the attacker bounces off the victim with this speed (fp), like a pogo stick
+        bool absolute = false;      // x is NOT relative to where the fighter faces: negative = the LEFT of the screen
 
         constexpr Hitbox frames(int s, int e) const { Hitbox b = *this; b.start = s; b.end = e; return b; }
         constexpr Hitbox at(int px, int py) const   { Hitbox b = *this; b.x = px; b.y = py; return b; }
@@ -91,6 +102,10 @@ namespace battle
         constexpr Hitbox dmg(int d) const           { Hitbox b = *this; b.damage = d; return b; }
         constexpr Hitbox launch(int kx, int ky) const { Hitbox b = *this; b.kb_x = kx; b.kb_y = ky; return b; }
         constexpr Hitbox stun(int frames_) const    { Hitbox b = *this; b.hitstun = frames_; return b; }
+        constexpr Hitbox grabs() const              { Hitbox b = *this; b.grab = true; return b; }
+        constexpr Hitbox keeps_grab() const         { Hitbox b = *this; b.keep_grab = true; return b; }
+        constexpr Hitbox bounces(int speed_fp) const { Hitbox b = *this; b.pogo = speed_fp; return b; }
+        constexpr Hitbox left_right() const         { Hitbox b = *this; b.absolute = true; return b; }
     };
 
     // Something that flies away (or just appears and stays, like an explosion).
@@ -106,6 +121,10 @@ namespace battle
         int hitstun = 0;
         bool absorbable = true;     // fox thief can steal it
         bool persist = false;       // stays around after it hit (explosions); it still only hits once
+        int vy = 0;                 // fp per frame, up/down speed at the start (negative = up)
+        int grav = 0;               // fp per frame: pulls the shot down (thrown objects fly in an arc). 0 = flies straight
+        const char* label = nullptr;    // shown as text instead of a picture (until there are pictures for it)
+        int boom = 0;               // > 0: when it hits (or lands) it explodes, with this much damage
 
         constexpr Shot of(int k) const              { Shot s = *this; s.kind = k; return s; }
         constexpr Shot dmg(int d) const             { Shot s = *this; s.damage = d; return s; }
@@ -116,6 +135,12 @@ namespace battle
         constexpr Shot stun(int frames_) const      { Shot s = *this; s.hitstun = frames_; return s; }
         constexpr Shot steal_proof() const          { Shot s = *this; s.absorbable = false; return s; }
         constexpr Shot lingers() const              { Shot s = *this; s.persist = true; return s; }
+        constexpr Shot arc(int vx_fp, int vy_fp, int gravity_fp, int frames_) const
+        {
+            Shot s = *this; s.speed = vx_fp; s.vy = vy_fp; s.grav = gravity_fp; s.life = frames_; return s;
+        }
+        constexpr Shot labeled(const char* text) const { Shot s = *this; s.label = text; return s; }
+        constexpr Shot explodes(int boom_damage) const { Shot s = *this; s.boom = boom_damage; return s; }
     };
 
     // The fighter FLIES for a while: gravity is off and the speed is forced (aqua jet).
@@ -148,6 +173,16 @@ namespace battle
         int absorb_start = 0, absorb_end = 0;   // frames where enemy shots that touch the fighter are stolen
         int power = 100;            // MF_USE_STORED: % of the stolen shot's damage and speed
         const Move* alt = nullptr;  // used INSTEAD of this move while the fighter is holding a stolen shot
+        const Shot* shot_list = nullptr;    // fires_random: one of these is picked each time
+        int shot_list_count = 0;
+        int leap_frame = -1;        // leaps(): at this frame the fighter is thrown off the ground (a jump that can't be steered)
+        int leap_vx = 0, leap_vy = 0;
+        int armor_start = 0, armor_end = 0, armor_limit = 0;   // super armor: hits of at most armor_limit damage don't flinch
+        int counter_start = 0, counter_end = 0;                // counter window: a melee hit in it is caught instead
+        const Move* on_counter_melee = nullptr;                // ...and this move starts (the victim is grabbed)
+        const Move* on_absorb = nullptr;                       // a shot that was stolen (absorbs) starts this move at once
+        const Move* on_grab = nullptr;                         // a hitbox with grabs() connected: this move takes over
+        int land_end = 0;           // ends_on_landing: when a downward dash touches the ground, jump to this frame
 
         constexpr Move() = default;
         constexpr Move(const char* n, int total_frames, int pose) : name(n), duration(total_frames), anim(pose) {}
@@ -172,6 +207,29 @@ namespace battle
         constexpr Move absorbs(int s, int e) const { Move m = *this; m.absorb_start = s; m.absorb_end = e; return m; }
         constexpr Move swaps_when_holding(const Move* other) const { Move m = *this; m.alt = other; return m; }
         constexpr Move once_per_jump() const { Move m = *this; m.flags |= MF_AIR_ONCE; return m; }
+
+        // ---- for the moves of Filip ----
+        constexpr Move with_anim(int pose) const { Move m = *this; m.anim = pose; return m; }     // the same move with another picture
+        constexpr Move fires_random(int frame, const Shot* list, int how_many) const
+        {
+            Move m = *this; m.shot_frame = frame; m.shot_list = list; m.shot_list_count = how_many; m.shot = list[0]; return m;
+        }
+        constexpr Move leaps(int frame, int vx_fp, int vy_fp) const
+        {
+            Move m = *this; m.leap_frame = frame; m.leap_vx = vx_fp; m.leap_vy = vy_fp; return m;
+        }
+        constexpr Move super_armor(int from, int to, int max_damage) const
+        {
+            Move m = *this; m.armor_start = from; m.armor_end = to; m.armor_limit = max_damage; return m;
+        }
+        constexpr Move counters_melee(int from, int to, const Move* then) const
+        {
+            Move m = *this; m.counter_start = from; m.counter_end = to; m.on_counter_melee = then; return m;
+        }
+        constexpr Move after_absorb(const Move* then) const { Move m = *this; m.on_absorb = then; return m; }
+        constexpr Move after_grab(const Move* then) const { Move m = *this; m.on_grab = then; return m; }
+        constexpr Move ends_on_landing(int frame) const { Move m = *this; m.land_end = frame; return m; }
+        constexpr Move orbits_held() const { Move m = *this; m.flags |= MF_ORBIT_HELD; return m; }
     };
 
     // Which move sits in which slot. nullptr = this fighter simply has no such move.
@@ -205,7 +263,35 @@ namespace battle
         int ai_skill;           // 0..100: how well the computer plays this fighter
         const MoveSet* moves;   // every move this fighter knows (see battle_moves.h)
         int weight = 100;       // 100 = normal. Heavier fighters (150) get launched less, lighter ones (70) more
+        int phys_pct = 100;     // % of damage dealt by A moves (jab, smashes, aerials). 100 = normal, 120 = 20% stronger
+        int magic_pct = 100;    // % of damage dealt by B moves (water gun, aqua jets...)
     };
+
+    // A small bonus from a companion that follows you but does not fight (main.cpp turns NPC traits into one of these).
+    // Every field is an ADDITION: 0 = no change. Buffs from several traits simply add up.
+    struct Buff
+    {
+        int phys_pct = 0;       // +% damage of A moves
+        int magic_pct = 0;      // +% damage of B moves
+        int speed_pct = 0;      // +% walking speed (and the acceleration that goes with it)
+        int jump_pct = 0;       // +% jump speed (about twice that in height)
+        int defense = 0;        // + percent of damage that is always removed
+    };
+
+    // The stats with a buff on top. The result is a COPY: Fight keeps a pointer to the stats it was given, so the
+    // copy has to stay alive for the whole fight (battle.h keeps it in the Battle object).
+    inline FighterStats with_buff(FighterStats s, const Buff& b)
+    {
+        s.phys_pct += b.phys_pct;
+        s.magic_pct += b.magic_pct;
+        s.walk_speed = s.walk_speed * (100 + b.speed_pct) / 100;
+        s.ground_accel = s.ground_accel * (100 + b.speed_pct) / 100;
+        s.air_accel = s.air_accel * (100 + b.speed_pct) / 100;
+        s.jump_power = s.jump_power * (100 + b.jump_pct) / 100;
+        s.double_jump_power = s.double_jump_power * (100 + b.jump_pct) / 100;
+        s.defense += b.defense;
+        return s;
+    }
 
     struct Platform
     {
@@ -226,7 +312,7 @@ namespace battle
     // THE FIGHT
     // ============================================================================================
 
-    enum State { ST_IDLE, ST_WALK, ST_AIR, ST_ATTACK, ST_SHIELD, ST_HURT, ST_KO };
+    enum State { ST_IDLE, ST_WALK, ST_AIR, ST_ATTACK, ST_SHIELD, ST_HURT, ST_KO, ST_GRABBED };   // GRABBED: held by somebody, can't act
 
     // what a fighter "pressed" this frame (the player's buttons, or the computer's decision)
     struct Input
@@ -265,10 +351,17 @@ namespace battle
         bool drive_cut = false;     // the dash was ended early (it hit, or it landed)
         bool land_fired = false;
         unsigned air_used = 0;      // bit per slot: used in this jump already (MF_AIR_ONCE)
+        bool move_magic = false;    // the move being performed is a B move (uses magic_pct instead of phys_pct)
+        int dmg_carry[2] = {};      // leftover from damage buffs: +20% of a 2-damage hit is 0.4, so the missing bits are
+                                    // saved here and paid out later (index 0 = physical, 1 = magic)
 
         // fox thief
         bool has_stored = false;
         Shot stored = {};
+
+        // grabs: grabbed_by = the fighter holding me (-1 = nobody), holding = the fighter I am holding
+        int grabbed_by = -1;
+        int holding = -1;
     };
 
     struct Projectile
@@ -278,6 +371,7 @@ namespace battle
         int owner = 0;
         int x16 = 0, y16 = 0;       // the middle of it
         int vx = 0;
+        int vy = 0;
         int age = 0;
         int life = 0;
         bool hit_done = false;
@@ -306,6 +400,7 @@ namespace battle
         bool blocked = false;       // a hit that landed on a shield
         bool jump = false;
         bool ko = false;
+        bool hitsmash = false;
     };
 
     // The computer's memory
@@ -337,19 +432,24 @@ namespace battle
     struct Fight
     {
         StageGeom stage = {};
-        Fighter f[2];               // f[0] = the player, f[1] = the opponent
+        Fighter f[3];               // f[0] = the player, f[1] = the opponent, f[2] = the player's partner (only if count == 3)
+        int count = 2;              // 2 = one on one, 3 = you and a partner against the opponent
         Projectile proj[MAX_PROJECTILES];
         Effect fx[MAX_EFFECTS];
-        Ai ai[2];
+        Ai ai[3];
         Events ev;
         unsigned rng = 1;
         int frame = 0;
         int winner = -1;            // -1 = still fighting, 0 = the player won, 1 = the opponent won
         int next_projectile_id = 0;
 
-        void start(const StageGeom& geometry, const FighterStats& player, const FighterStats& enemy, unsigned seed)
+        // `partner` (optional) is a computer-controlled fighter on the PLAYER's side: a 2 against 1 fight.
+        // The stats are only pointed at, not copied: they have to stay alive for the whole fight.
+        void start(const StageGeom& geometry, const FighterStats& player, const FighterStats& enemy, unsigned seed,
+                   const FighterStats* partner = nullptr)
         {
             stage = geometry;
+            count = partner ? 3 : 2;
             rng = seed * 2654435761u + 977u;
             if(rng == 0) { rng = 1; }
             frame = 0;
@@ -357,38 +457,41 @@ namespace battle
             next_projectile_id = 0;
             for(Projectile& p : proj) { p = Projectile(); }
             for(Effect& e : fx) { e = Effect(); }
-            ai[0] = Ai();
-            ai[1] = Ai();
+            for(Ai& brain : ai) { brain = Ai(); }
 
-            const FighterStats* stats[2] = { &player, &enemy };
-            const int spawn[2] =
+            const int player_x = geometry.spawn_player > 0 ? geometry.spawn_player : geometry.length * 3 / 10;
+            const FighterStats* stats[3] = { &player, &enemy, partner };
+            const int spawn[3] =
             {
-                geometry.spawn_player > 0 ? geometry.spawn_player : geometry.length * 3 / 10,
+                player_x,
                 geometry.spawn_enemy > 0 ? geometry.spawn_enemy : geometry.length * 7 / 10,
+                player_x - PARTNER_SPACING >= BODY_MARGIN ? player_x - PARTNER_SPACING : player_x + PARTNER_SPACING,
             };
 
-            for(int i = 0; i < 2; ++i)
+            for(int i = 0; i < 3; ++i) { f[i] = Fighter(); }              // (an unused slot stays empty and is never touched)
+            for(int i = 0; i < count; ++i)
             {
-                f[i] = Fighter();
                 f[i].stats = stats[i];
                 f[i].x16 = spawn[i] * FP;
                 f[i].y16 = geometry.ground_y * FP;
                 f[i].on_ground = true;
                 f[i].hp = stats[i]->max_hp;
                 f[i].jumps_left = stats[i]->max_jumps;
-                f[i].facing = i == 0 ? 1 : -1;
+                f[i].facing = team_of(i) == 0 ? 1 : -1;
                 f[i].state = ST_IDLE;
             }
         }
 
-        // Advance the fight by one frame. in[0] = the player's input, in[1] = the opponent's.
+        // Advance the fight by one frame. in[0] = the player's input, in[1] = the opponent's, in[2] = the partner's
+        // (in[2] is only read when there is a partner).
         void step(const Input* in)
         {
             ev = Events();
 
-            for(int i = 0; i < 2; ++i) { update_fighter(i, in[i]); }    // movement, starting moves, flying, firing
+            for(int i = 0; i < count; ++i) { update_fighter(i, in[i]); } // movement, starting moves, flying, firing
             resolve_melee();                                            // did any hitbox touch anybody?
-            for(int i = 0; i < 2; ++i) { advance_move(i); }             // the move's clock ticks
+            for(int i = 0; i < count; ++i) { advance_move(i); }          // the move's clock ticks
+            update_grabs();                                             // whoever is held stays in front of the grabber
             update_projectiles();
             for(Effect& e : fx) { if(e.active && ++e.age >= e.life) { e.active = false; } }
             ++frame;
@@ -399,6 +502,21 @@ namespace battle
                 else if(f[1].hp <= 0) { winner = 0; }
                 else if(frame >= TIME_LIMIT) { winner = f[0].hp > f[1].hp ? 0 : 1; }
             }
+        }
+
+        // Teams: the player (0) and the partner (2) against the opponent (1).
+        static int team_of(int i) { return i == 1 ? 1 : 0; }
+
+        // The fighter that fighter i is fighting. The player and the partner both fight the opponent. The opponent fights
+        // whichever of the two is closest (a knocked-out one is ignored).
+        int foe_of(int i) const
+        {
+            if(team_of(i) == 0) { return 1; }
+            if(count < 3) { return 0; }
+            const bool first_down = f[0].state == ST_KO;
+            const bool partner_down = f[2].state == ST_KO;
+            if(first_down != partner_down) { return first_down ? 2 : 0; }
+            return abs_i(f[0].x16 - f[i].x16) <= abs_i(f[2].x16 - f[i].x16) ? 0 : 2;
         }
 
         // Which slot do these buttons mean?  (public: the computer and the tests use it too)
@@ -436,7 +554,7 @@ namespace battle
             if(p.state != ST_ATTACK || !p.move || k >= p.move->hit_count) { return false; }
             const Hitbox& h = p.move->hits[k];
             if(p.move_frame < h.start || p.move_frame >= h.end) { return false; }
-            out = Rect{ p.x16 / FP + p.facing * h.x, p.y16 / FP - h.y, h.w, h.h };
+            out = Rect{ p.x16 / FP + (h.absolute ? h.x : p.facing * h.x), p.y16 / FP - h.y, h.w, h.h };
             return true;
         }
 
@@ -445,7 +563,7 @@ namespace battle
         {
             Input in;
             const Fighter& me = f[self];
-            const Fighter& op = f[1 - self];
+            const Fighter& op = f[foe_of(self)];
             Ai& brain = ai[self];
             if(winner >= 0 || me.state == ST_KO) { return in; }
 
@@ -466,7 +584,7 @@ namespace battle
             const int my_mid_y = me.y16 - (s.body_h * FP) / 2;
             for(const Projectile& p : proj)
             {
-                if(!p.active || p.owner == self || p.vx == 0) { continue; }
+                if(!p.active || team_of(p.owner) == team_of(self) || p.vx == 0) { continue; }
                 const int pdx = (p.x16 - me.x16) / FP;
                 const bool coming = (pdx > 0 && p.vx < 0) || (pdx < 0 && p.vx > 0);
                 const int pdy = abs_i((p.y16 - my_mid_y) / FP);
@@ -584,7 +702,7 @@ namespace battle
                 {
                     const Move* jet = s.moves ? s.moves->slot[SLOT_SPECIAL_SIDE] : nullptr;
                     const Move* gun = s.moves ? s.moves->slot[SLOT_SPECIAL] : nullptr;
-                    const int jet_range = jet ? jet->drive.vx * (jet->drive.end - jet->drive.start) / FP + 12 : 0;
+                    const int jet_range = !jet ? 0 : (jet->leap_frame >= 0 ? jet->leap_vx * 16 / FP + 12 : jet->drive.vx * (jet->drive.end - jet->drive.start) / FP + 12);
                     const int gun_range = (gun && gun->shot_frame >= 0) ? gun->shot.speed * gun->shot.life / FP : 0;
 
                     if(jet && adx > 40 && adx < jet_range && random_below(1000) < 6 + s.ai_skill / 10)
@@ -614,6 +732,7 @@ namespace battle
         struct PendingHit
         {
             int attacker;
+            int victim;                 // which fighter was touched (a hitbox can touch both enemies of a 2 against 1 fight)
             int index;                  // which hitbox of the attacker's move
             Hitbox box;                 // a copy, because the attacker's move can be cut short by the same frame's hits
             int dir;                    // +1: the victim is launched to the right
@@ -646,7 +765,7 @@ namespace battle
             Fighter& p = f[i];
             const FighterStats& s = *p.stats;
             Input in = raw;
-            if(winner >= 0 || p.state == ST_KO) { in = Input(); }
+            if(winner >= 0 || p.state == ST_KO || p.state == ST_GRABBED) { in = Input(); }
             if(p.drop_timer > 0) { --p.drop_timer; }
 
             // ---- states that run by themselves ----
@@ -749,6 +868,15 @@ namespace battle
                 if(p.move_frame < p.move->land_frame) { p.move_frame = p.move->land_frame; }
             }
 
+            // ---- a downward dash (dair) that touched the ground ends: only the landing lag is left ----
+            if(p.state == ST_ATTACK && p.move && p.driving && p.on_ground && p.move->land_end > 0 && !p.land_fired)
+            {
+                p.land_fired = true;
+                p.drive_cut = true;
+                p.vx = 0;
+                if(p.move_frame < p.move->land_end) { p.move_frame = p.move->land_end; }
+            }
+
             // ---- which of idle / walk / air are we? ----
             if(p.state == ST_IDLE || p.state == ST_WALK || p.state == ST_AIR)
             {
@@ -774,6 +902,15 @@ namespace battle
             const bool aerial = in.attack && !in.special && !p.on_ground;
             if(in.move != 0 && !aerial) { p.facing = in.move; }
 
+            begin_move(p, m, in.special);                                 // B = magic, A = physical (for the damage buffs)
+            if(!p.on_ground && (m->flags & MF_AIR_ONCE)) { p.air_used |= 1u << slot; }
+            if(m->hit_count > 0 || m->drive.end > m->drive.start) { ev.swing = true; }
+            return true;
+        }
+
+        // Starts a move from frame 0 (also used when one move hands over to another: counter, grab...)
+        static void begin_move(Fighter& p, const Move* m, bool magic)
+        {
             p.state = ST_ATTACK;
             p.move = m;
             p.move_frame = 0;
@@ -781,10 +918,8 @@ namespace battle
             p.driving = false;
             p.drive_cut = false;
             p.land_fired = false;
+            p.move_magic = magic;
             p.down_hold = 0;
-            if(!p.on_ground && (m->flags & MF_AIR_ONCE)) { p.air_used |= 1u << slot; }
-            if(m->hit_count > 0 || m->drive.end > m->drive.start) { ev.swing = true; }
-            return true;
         }
 
         // Runs frame `move_frame` of the fighter's move: flying and firing. Returns true while gravity must stay off.
@@ -803,7 +938,7 @@ namespace battle
 
                 if(d.homing > 0)                                          // steer up or down toward the opponent (if they are ahead)
                 {
-                    const Fighter& op = f[1 - i];
+                    const Fighter& op = f[foe_of(i)];
                     if((op.x16 - p.x16) * p.facing > 0)
                     {
                         const int want = (op.y16 - (op.stats->body_h * FP) / 2) - (p.y16 - (p.stats->body_h * FP) / 2);
@@ -823,9 +958,18 @@ namespace battle
                 p.vy = p.vy * DRIVE_EXIT_PERCENT / 100;
             }
 
+            if(m.leap_frame >= 0 && t == m.leap_frame)                    // thrown off the ground like a jump (gravity does the rest)
+            {
+                p.vx = p.facing * m.leap_vx;
+                p.vy = m.leap_vy;
+                p.on_ground = false;
+                p.support = -1;
+            }
+
             if(m.shot_frame >= 0 && t == m.shot_frame)
             {
                 if(m.flags & MF_USE_STORED) { if(p.has_stored) { throw_stored(i, m.power); } }
+                else if(m.shot_list && m.shot_list_count > 0) { spawn_shot(i, m.shot_list[random_below(m.shot_list_count)]); ev.shot = true; }
                 else                        { spawn_shot(i, m.shot); ev.shot = true; }
             }
             return floating;
@@ -903,9 +1047,18 @@ namespace battle
         // ---------------------------------------------------------------------------- shots
 
         // Puts a shot into the world, in front of the fighter who fires it.
-        void spawn_shot(int owner, const Shot& sh)
+        // (the owner's damage buff is applied here, except for a shot that was stolen: that one was buffed already)
+        void spawn_shot(int owner, const Shot& shot, bool apply_buff = true)
         {
-            const Fighter& p = f[owner];
+            Fighter& p = f[owner];
+            spawn_shot_at(owner, shot, p.x16 + p.facing * shot.dx * FP, p.y16 - shot.dy * FP, p.facing * shot.speed, apply_buff);
+        }
+
+        void spawn_shot_at(int owner, const Shot& shot, int x16, int y16, int vx, bool apply_buff = true)
+        {
+            Fighter& p = f[owner];
+            Shot sh = shot;
+            if(apply_buff) { sh.damage = buffed_damage(p, sh.damage); }
             for(Projectile& pr : proj)
             {
                 if(pr.active) { continue; }
@@ -913,13 +1066,23 @@ namespace battle
                 pr.active = true;
                 pr.id = next_projectile_id++;
                 pr.owner = owner;
-                pr.x16 = p.x16 + p.facing * sh.dx * FP;
-                pr.y16 = p.y16 - sh.dy * FP;
-                pr.vx = p.facing * sh.speed;
+                pr.x16 = x16;
+                pr.y16 = y16;
+                pr.vx = vx;
+                pr.vy = sh.vy;
                 pr.life = sh.life;
                 pr.shot = sh;
                 return;
             }
+        }
+
+        // a laptop (or anything with boom > 0) blows up where it hit
+        void spawn_boom(int owner, int x16, int y16, int damage)
+        {
+            const Shot boom = Shot().of(PROJ_EXPLOSION).dmg(damage).fly(0, 10).size(40, 30)
+                                    .launch(fp(3.5), fp(-4.0)).stun(22).steal_proof().lingers();
+            spawn_shot_at(owner, boom, x16, y16, 0);
+            ev.boom = true;
         }
 
         // fox thief, second press: send the stolen shot back (a bit stronger and faster)
@@ -930,7 +1093,7 @@ namespace battle
             sh.speed = sh.speed * power / 100;
             sh.damage = sh.damage * power / 100;
             if(sh.damage < 1) { sh.damage = 1; }
-            spawn_shot(i, sh);
+            spawn_shot(i, sh, false);
             p.has_stored = false;
             ev.shot = true;
         }
@@ -942,88 +1105,276 @@ namespace battle
                 if(!pr.active) { continue; }
 
                 pr.x16 += pr.vx;
+                if(pr.shot.grav != 0 || pr.vy != 0)                       // thrown objects fly in an arc
+                {
+                    pr.vy += pr.shot.grav;
+                    pr.y16 += pr.vy;
+                }
                 ++pr.age;
                 if(--pr.life <= 0 || pr.x16 < -32 * FP || pr.x16 > (stage.length + 32) * FP) { pr.active = false; continue; }
 
-                Fighter& target = f[1 - pr.owner];
-                if(target.state == ST_KO || pr.hit_done) { continue; }
+                if(pr.shot.grav != 0 && pr.vy > 0 && pr.y16 >= stage.ground_y * FP)   // an arc that came down onto the floor
+                {
+                    pr.active = false;
+                    if(pr.shot.boom > 0) { spawn_boom(pr.owner, pr.x16, stage.ground_y * FP - 8 * FP, pr.shot.boom); }
+                    continue;
+                }
 
                 const Shot& sh = pr.shot;
                 const Rect box{ pr.x16 / FP, pr.y16 / FP, sh.w, sh.h };
-                Rect body = hurtbox_of(target);
 
-                // fox thief: while the stance is up, a shot that comes close is stolen instead of hurting
-                const Move* tm = target.move;
-                if(sh.absorbable && !target.has_stored && target.state == ST_ATTACK && tm && tm->absorb_end > tm->absorb_start &&
-                   target.move_frame >= tm->absorb_start && target.move_frame < tm->absorb_end)
+                // a shot hits the first fighter of the OTHER team that it touches (never its own side)
+                for(int ti = 0; ti < count && pr.active && !pr.hit_done; ++ti)
                 {
-                    Rect catch_zone = body;
-                    catch_zone.w += ABSORB_MARGIN * 2;
-                    catch_zone.h += ABSORB_MARGIN * 2;
-                    if(overlaps(box, catch_zone))
+                    if(team_of(ti) == team_of(pr.owner) || f[ti].state == ST_KO) { continue; }
+
+                    Fighter& target = f[ti];
+                    Rect body = hurtbox_of(target);
+
+                    // fox thief: while the stance is up, a shot that comes close is stolen instead of hurting
+                    const Move* tm = target.move;
+                    if(sh.absorbable && !target.has_stored && target.state == ST_ATTACK && tm && tm->absorb_end > tm->absorb_start &&
+                       target.move_frame >= tm->absorb_start && target.move_frame < tm->absorb_end)
                     {
-                        target.has_stored = true;
-                        target.stored = sh;
-                        pr.active = false;
-                        ev.absorb = true;
-                        continue;
+                        Rect catch_zone = body;
+                        catch_zone.w += ABSORB_MARGIN * 2;
+                        catch_zone.h += ABSORB_MARGIN * 2;
+                        if(overlaps(box, catch_zone))
+                        {
+                            target.has_stored = true;
+                            target.stored = sh;
+                            pr.active = false;
+                            ev.absorb = true;
+                            if(tm->on_absorb) { begin_move(target, tm->on_absorb, target.move_magic); }   // (Filip: spin and throw it back at once)
+                            break;
+                        }
                     }
-                }
 
-                if(overlaps(box, body))
-                {
-                    int dir = sign_i(pr.vx);
-                    if(dir == 0) { dir = sign_i(target.x16 - pr.x16); }   // an explosion pushes away from its middle
-                    if(dir == 0) { dir = f[pr.owner].facing; }
-                    hit(target, sh.damage, sh.kb_x, sh.kb_y, sh.hitstun, dir, pr.x16, pr.y16);
-                    if(sh.persist) { pr.hit_done = true; } else { pr.active = false; }
+                    if(overlaps(box, body))
+                    {
+                        int dir = sign_i(pr.vx);
+                        if(dir == 0) { dir = sign_i(target.x16 - pr.x16); }   // an explosion pushes away from its middle
+                        if(dir == 0) { dir = f[pr.owner].facing; }
+                        hit(target, sh.damage, sh.kb_x, sh.kb_y, sh.hitstun, dir, pr.x16, pr.y16);
+                        if(sh.boom > 0) { spawn_boom(pr.owner, pr.x16, pr.y16, sh.boom); }
+                        if(sh.persist) { pr.hit_done = true; } else { pr.active = false; }
+                    }
                 }
             }
         }
 
         // ---------------------------------------------------------------------------- melee
 
-        // Checks every active hitbox against the opponent. Everything that touches this frame is collected first and
+        // Checks every active hitbox against the other team. Everything that touches this frame is collected first and
         // applied afterwards, so two fighters that hit each other on the same frame BOTH get hit (a trade).
         void resolve_melee()
         {
-            PendingHit pending[2 * MAX_HITBOXES];
-            int count = 0;
+            PendingHit pending[3 * MAX_HITBOXES * 2];
+            int pending_count = 0;
 
-            for(int a = 0; a < 2; ++a)
+            for(int a = 0; a < count; ++a)
             {
                 const Fighter& p = f[a];
-                const Fighter& t = f[1 - a];
-                if(p.state != ST_ATTACK || !p.move || t.state == ST_KO) { continue; }
+                if(p.state != ST_ATTACK || !p.move) { continue; }
 
-                const Rect body = hurtbox_of(t);
-                for(int k = 0; k < p.move->hit_count; ++k)
+                for(int v = 0; v < count; ++v)
                 {
-                    Rect box;
-                    if(!hitbox_now(a, k, box) || (p.hit_done & (1u << k)) || !overlaps(box, body)) { continue; }
+                    const Fighter& t = f[v];
+                    if(team_of(v) == team_of(a) || t.state == ST_KO) { continue; }
 
-                    const Hitbox& h = p.move->hits[k];
-                    const int gap = t.x16 - p.x16;
-                    PendingHit& ph = pending[count++];
-                    ph.attacker = a;
-                    ph.index = k;
-                    ph.box = h;
-                    // launched away from the attacker (so a hit BEHIND flies backwards). Straight above or below: use the hitbox's side
-                    ph.dir = abs_i(gap) < 3 * FP ? (h.x < 0 ? -p.facing : p.facing) : sign_i(gap);
-                    ph.sx16 = ((box.x + body.x) / 2) * FP;
-                    ph.sy16 = ((box.y + body.y) / 2) * FP;
-                    ph.stops_dash = p.move->drive.stop_on_hit;
+                    const Rect body = hurtbox_of(t);
+                    for(int k = 0; k < p.move->hit_count; ++k)
+                    {
+                        Rect box;
+                        if(!hitbox_now(a, k, box) || (p.hit_done & (1u << k)) || !overlaps(box, body)) { continue; }
+
+                        const Hitbox& h = p.move->hits[k];
+                        const int gap = t.x16 - p.x16;
+                        PendingHit& ph = pending[pending_count++];
+                        ph.attacker = a;
+                        ph.victim = v;
+                        ph.index = k;
+                        ph.box = h;
+                        // launched away from the attacker (so a hit BEHIND flies backwards). Straight above or below: use the hitbox's side
+                        ph.dir = abs_i(gap) < 3 * FP ? (h.absolute ? (h.x < 0 ? -1 : 1) : (h.x < 0 ? -p.facing : p.facing)) : sign_i(gap);
+                        ph.sx16 = ((box.x + body.x) / 2) * FP;
+                        ph.sy16 = ((box.y + body.y) / 2) * FP;
+                        ph.stops_dash = p.move->drive.stop_on_hit;
+                    }
                 }
             }
 
-            for(int n = 0; n < count; ++n)
+            for(int n = 0; n < pending_count; ++n)
             {
                 const PendingHit& ph = pending[n];
                 Fighter& attacker = f[ph.attacker];
+                Fighter& victim = f[ph.victim];
                 attacker.hit_done |= 1u << ph.index;
+                if(attacker.state == ST_GRABBED) { continue; }                 // (it was just caught by a counter: its other hits are void)
                 if(ph.stops_dash && attacker.state == ST_ATTACK) { attacker.drive_cut = true; }
-                hit(f[1 - ph.attacker], ph.box.damage, ph.box.kb_x, ph.box.kb_y, ph.box.hitstun, ph.dir, ph.sx16, ph.sy16);
+
+                // a grab: no damage, the grabber's next move takes over (Filip's leap)
+                if(ph.box.grab) { grab_connects(ph.attacker, ph.victim); continue; }
+
+                // Filip's counter: a melee hit that lands inside the counter window is caught and answered
+                const Move* vm = victim.move;
+                if(vm && vm->on_counter_melee && in_window(victim, vm->counter_start, vm->counter_end))
+                {
+                    counter_melee(ph.victim, ph.attacker);
+                    continue;
+                }
+
+                const int damage = buffed_damage(attacker, ph.box.damage);
+
+                // a scratch on somebody who is held: damage only, they stay held
+                if(ph.box.keep_grab && victim.grabbed_by == ph.attacker)
+                {
+                    scratch(victim, damage, ph.box.kb_x, ph.box.kb_y, ph.dir);
+                    spawn_effect(FX_SPARK, ph.sx16, ph.sy16, 10);
+                    continue;
+                }
+
+                hit(victim, damage, ph.box.kb_x, ph.box.kb_y, ph.box.hitstun, ph.dir, ph.sx16, ph.sy16);
+                if(ph.box.pogo > 0) { pogo(attacker, ph.box.pogo); }
             }
+        }
+
+        // ---------------------------------------------------------------------------- grabs, counters, pogo
+
+        static bool in_window(const Fighter& t, int from, int to)
+        {
+            return t.state == ST_ATTACK && t.move && to > from && t.move_frame >= from && t.move_frame < to;
+        }
+
+        // `victim` is now held by `grabber`: it can't act and is kept in front of the grabber until it is hit or let go
+        void begin_grab(int grabber, int victim)
+        {
+            Fighter& g = f[grabber];
+            Fighter& v = f[victim];
+            cancel_move(v);
+            v.state = ST_GRABBED;
+            v.grabbed_by = grabber;
+            v.vx = 0;
+            v.vy = 0;
+            v.timer = 0;
+            g.holding = victim;
+            g.vx = 0;
+            g.vy = 0;
+        }
+
+        void release_grab(int victim)
+        {
+            Fighter& v = f[victim];
+            if(v.grabbed_by >= 0)
+            {
+                Fighter& g = f[v.grabbed_by];
+                if(g.holding == victim) { g.holding = -1; }
+                v.grabbed_by = -1;
+            }
+            if(v.state == ST_GRABBED) { v.state = ST_HURT; v.timer = GRAB_RELEASE_STUN; }
+        }
+
+        void clear_grab_of(Fighter& t)                                // (the victim got hit for real: it is not held any more)
+        {
+            if(t.grabbed_by < 0) { return; }
+            Fighter& g = f[t.grabbed_by];
+            if(g.holding == &t - f) { g.holding = -1; }
+            t.grabbed_by = -1;
+        }
+
+        // keeps every grabbed fighter in front of the one holding it. If the grabber is interrupted (hit, or its move ended)
+        // the victim is let go.
+        void update_grabs()
+        {
+            for(int v = 0; v < count; ++v)
+            {
+                Fighter& vf = f[v];
+                if(vf.grabbed_by < 0) { continue; }
+                Fighter& gf = f[vf.grabbed_by];
+                if(winner >= 0 || gf.state != ST_ATTACK || gf.holding != v || vf.state == ST_KO) { release_grab(v); continue; }
+
+                int x16 = gf.x16 + gf.facing * GRAB_DISTANCE * FP;
+                if(x16 < BODY_MARGIN * FP) { x16 = BODY_MARGIN * FP; }
+                if(x16 > (stage.length - BODY_MARGIN) * FP) { x16 = (stage.length - BODY_MARGIN) * FP; }
+                vf.x16 = x16;
+                vf.y16 = gf.y16;
+                vf.vx = 0;
+                vf.vy = 0;
+                vf.facing = -gf.facing;
+                vf.on_ground = gf.on_ground;
+                vf.support = gf.support;
+            }
+        }
+
+        // a hitbox with grabs() touched somebody (shields don't stop a grab)
+        void grab_connects(int grabber, int victim)
+        {
+            Fighter& g = f[grabber];
+            const Fighter& v = f[victim];
+            if(v.state == ST_KO || v.grabbed_by >= 0 || g.holding >= 0) { return; }
+            const Move* next = g.move ? g.move->on_grab : nullptr;
+            begin_grab(grabber, victim);
+            if(next) { begin_move(g, next, g.move_magic); }
+            spawn_effect(FX_SPARK, v.x16, v.y16 - (v.stats->body_h * FP) / 2, 10);
+            ev.hit = true;
+        }
+
+        // Filip's counter caught a melee hit: the attacker is grabbed, and the counter's next move (grab + punch) starts
+        void counter_melee(int counter, int attacker)
+        {
+            Fighter& c = f[counter];
+            const Fighter& a = f[attacker];
+            const Move* next = c.move->on_counter_melee;
+            const int dir = sign_i(a.x16 - c.x16);
+            if(dir != 0) { c.facing = dir; }
+            begin_grab(counter, attacker);
+            begin_move(c, next, c.move_magic);
+            spawn_effect(FX_SPARK, (a.x16 + c.x16) / 2, c.y16 - (c.stats->body_h * FP) / 2, 10);
+            ev.absorb = true;
+        }
+
+        // damage to somebody who stays held (the three scratches). If it would knock them out, it is a normal hit.
+        void scratch(Fighter& t, int damage, int kb_x, int kb_y, int dir)
+        {
+            int dealt = damage * (100 - t.stats->defense) / 100;
+            if(dealt < 1) { dealt = 1; }
+            if(t.hp - dealt <= 0) { hurt(t, damage, kb_x, kb_y, 0, dir); return; }
+            t.hp -= dealt;
+            ev.hit = true;
+        }
+
+        // the attacker bounced off the victim (pogo): thrown upward, the dash is over, only a short recovery is left
+        static void pogo(Fighter& a, int speed)
+        {
+            a.vy = -speed;
+            a.vx = a.vx / 2;
+            a.on_ground = false;
+            a.support = -1;
+            a.driving = false;
+            a.drive_cut = true;
+            if(a.state == ST_ATTACK && a.move && a.move_frame < a.move->duration - POGO_RECOVERY)
+            {
+                a.move_frame = a.move->duration - POGO_RECOVERY;
+            }
+        }
+
+        // ---------------------------------------------------------------------------- damage buffs
+
+        // The attacker's damage buff (phys_pct for A moves, magic_pct for B moves). Whole numbers lose the small parts
+        // (+20% of a 2 damage slap is 0.4), so what is missing is kept in dmg_carry and paid out on later hits:
+        // five slaps of 2 really do add up to 12 instead of 10.
+        static int buffed_damage(Fighter& attacker, int damage)
+        {
+            if(damage <= 0) { return damage; }                            // (a hit that only stuns stays a hit that only stuns)
+            const int type = attacker.move_magic ? 1 : 0;
+            const int pct = type == 1 ? attacker.stats->magic_pct : attacker.stats->phys_pct;
+            if(pct == 100) { return damage; }
+
+            attacker.dmg_carry[type] += damage * (pct - 100);
+            const int extra = attacker.dmg_carry[type] / 100;
+            attacker.dmg_carry[type] -= extra * 100;
+            const int result = damage + extra;
+            return result < 1 ? 1 : result;
         }
 
         // ---------------------------------------------------------------------------- getting hit
@@ -1065,13 +1416,25 @@ namespace battle
         void hurt(Fighter& t, int damage, int kb_x, int kb_y, int stun, int dir)
         {
             const FighterStats& s = *t.stats;
+            clear_grab_of(t);
             int reduction = s.defense;
             const bool guarding = t.state == ST_SHIELD;
             if(guarding) { reduction += SHIELD_MAX_REDUCTION * t.shield / SHIELD_MAX; }
             if(reduction > 95) { reduction = 95; }
 
             int dealt = damage * (100 - reduction) / 100;
-            if(dealt < 1) { dealt = 1; }                                  // there is always a little chip damage
+            if(dealt < 1 && damage > 0) { dealt = 1; }                    // there is always a little chip damage (a 0 damage hit only stuns)
+
+            // super armor: a hit that is not strong enough neither flinches nor launches. A strong one breaks through.
+            const Move* tm = t.move;
+            if(tm && tm->armor_end > tm->armor_start && in_window(t, tm->armor_start, tm->armor_end) &&
+               !guarding && dealt <= tm->armor_limit && t.hp - dealt > 0)
+            {
+                t.hp -= dealt;
+                ev.hit = true;
+                return;
+            }
+
             t.hp -= dealt;
 
             if(t.hp <= 0)
@@ -1092,8 +1455,8 @@ namespace battle
             }
             else
             {
-                ev.hit = true;
-                cancel_move(t);                                           // being hit interrupts whatever you were doing
+                if (dealt >= 10){ ev.hitsmash = true;} else {ev.hit = true;}
+                if (dealt >= 3 || damage == 0) {cancel_move(t);}                            // being hit interrupts whatever you were doing
                 t.state = ST_HURT;
                 t.timer = stun > 0 ? stun : HURT_FRAMES;
                 launch(t, kb_x, kb_y, dir);

@@ -30,6 +30,8 @@
 #include "bn_sprite_ptr.h"
 #include "bn_sprite_text_generator.h"
 #include "bn_vector.h"
+#include "bn_bg_palettes.h"
+#include "bn_sprite_palettes.h"
 
 #include "bn_sprite_items_black_block.h"
 #include "bn_sprite_items_water_shot.h"
@@ -88,6 +90,7 @@ namespace battle
         EV_DASH    = 1 << 7,    // an aqua jet took off
         EV_ABSORB  = 1 << 8,    // fox thief stole a shot
         EV_BOOM    = 1 << 9,    // the dair explosion
+        EV_SMASH   = 1 << 10,
     };
 
     // ============================================================================================
@@ -98,17 +101,43 @@ namespace battle
 
     constexpr int DIR_UP = 0, DIR_DOWN = 1, DIR_LEFT = 2, DIR_RIGHT = 3, SHIELD = 28, KO = 24, HURT = 25;
     //waffles specific animation
-    constexpr int WAF_SIDE_JET = 30, WAF_UP_JET = 32;
+    constexpr int WAF_SIDE_JET = 30, WAF_UP_JET = 32, WAF_KICK = 51;
     constexpr int walk_frames[4] = { 0, 1, 0, 2 };
 
     constexpr int waff_jab[4] = {33,34,35,36};
+    constexpr int waff_down_smash[8] = {41,42,43,44,44,45,46,47};
+    constexpr int waff_up_smash[8] = {47,46,45,44,44,43,42,41};
+    constexpr int waff_returntosender[2] = {33,34};
+    constexpr int waff_left_returntosender = 4;
     constexpr int waff_jab_left_ofset = 4;
+    constexpr int waff_tail_slam[7] = {48,49,50,51,52,53,54};
+    constexpr int waff_tail_slam_left_offset = 7;
+
+    // Filip (snep sheet). Everything is listed for facing RIGHT; the "offset" is added when he faces LEFT.
+    constexpr int snep_basic_punch[5] = {30,31,32,33,34};
+    constexpr int snep_basic_punch_offset = 5;
+    constexpr int snep_counter[5] = {40,41,42,43,44};           // the counter stance
+    constexpr int snep_counter_offset = 0;                      // 0 = the same frames 40-44 facing left too. If the sheet has a separate
+                                                                // left version, put its offset here (careful: a frame that is not on the sheet crashes)
+    constexpr int snep_grab[5] = {35,34,33,34,35};              // grabbing the attacker (facing left = +5 = 40,39,38,39,40)
+    constexpr int snep_grab_offset = 5;
+    constexpr int snep_throw_pose = 35;                         // the pose he finishes the spin on when he throws the shot back
+    constexpr int snep_throw_pose_offset = 5;                   // (facing left = 40)
 
     constexpr int SPRITE_FEET = 12;                  // from the middle of the sprite down to the feet (as in the overworld)
 
     inline int sheet_frame(int dir, bool running)
     {
         return (running ? 12 : 0) + dir * 3;
+    }
+    // Plays pictures[0 .. count-1] ONCE, `ticks` game frames per picture, starting `begin` frames into the move.
+    // Returns -1 when it isn't playing (before it starts, or after it ends unless hold_last is true).
+    inline int play_once(const int* pictures, int count, int ticks, int begin, int move_frame, bool hold_last = false)
+    {
+        const int t = move_frame - begin;
+        if(t < 0) { return -1; }
+        if(t >= count * ticks) { return hold_last ? pictures[count - 1] : -1; }
+        return pictures[t / ticks];
     }
 
     // The pose during a move. These are all stand-ins made from the frames you already have: moves that go up show
@@ -120,15 +149,96 @@ namespace battle
         switch(anim)
         {
             // Waffles MoveSet
+            case ANIM_SNEP_PUNCH:
+            {
+                const int pic = play_once(snep_basic_punch,5,4,0,move_frame);
+                return pic >= 0 ? pic + (side == DIR_LEFT ? snep_basic_punch_offset : 0) : sheet_frame(side, false);
+            }
+            case ANIM_SNEP_JAB:                         // the slap combo: three punches (hits at frames 4, 14 and 24)
+            {
+                if(move_frame >= 32) { return sheet_frame(side, false); }
+                return snep_basic_punch[(move_frame % 10) * 5 / 10] + (side == DIR_LEFT ? snep_basic_punch_offset : 0);
+            }
+            case ANIM_SNEP_HEAVY:                       // the heavy punch: a long wind-up, then the punch (hit at 34)
+            {
+                const int off = side == DIR_LEFT ? snep_basic_punch_offset : 0;
+                if(move_frame < 20) { return snep_basic_punch[0] + off; }
+                if(move_frame < 34) { return snep_basic_punch[1] + off; }
+                if(move_frame < 37) { return snep_basic_punch[3] + off; }
+                if(move_frame < 50) { return snep_basic_punch[4] + off; }
+                return sheet_frame(side, false);
+            }
+            case ANIM_SNEP_FLIP:                        // the backflip: turns through the four directions while it flies
+            {
+                static const int order[4] = { DIR_RIGHT, DIR_UP, DIR_LEFT, DIR_DOWN };
+                if(move_frame < 4 || move_frame >= 24) { return sheet_frame(side, false); }
+                const int step = ((move_frame - 4) / 3) % 4;
+                return sheet_frame(facing > 0 ? order[step] : order[(4 - step) % 4], false);
+            }
+            case ANIM_SNEP_DSMASH:                      // left punch first (frames 0-14), then the right one (16-30)
+            {
+                const int left = play_once(snep_basic_punch, 5, 3, 0, move_frame);
+                if(left >= 0) { return left + snep_basic_punch_offset; }
+                const int right = play_once(snep_basic_punch, 5, 3, 16, move_frame);
+                return right >= 0 ? right : sheet_frame(side, false);
+            }
+            case ANIM_SNEP_COUNTER:                     // the counter stance: plays once and holds the last picture
+            {
+                const int pic = play_once(snep_counter, 5, 4, 0, move_frame, true);
+                return pic + (side == DIR_LEFT ? snep_counter_offset : 0);
+            }
+            case ANIM_SNEP_COUNTER_GRAB:                // grabs the attacker (0-29), then the counter punch (30-44)
+            {
+                const int grab = play_once(snep_grab, 5, 6, 0, move_frame);
+                if(grab >= 0) { return grab + (side == DIR_LEFT ? snep_grab_offset : 0); }
+                const int punch = play_once(snep_basic_punch, 5, 3, 30, move_frame);
+                if(punch >= 0) { return punch + (side == DIR_LEFT ? snep_basic_punch_offset : 0); }
+                return sheet_frame(side, false);
+            }
+            case ANIM_SNEP_SPIN_THROW:                  // spins with the shot (0-23), then the throwing pose
+            {
+                static const int order[4] = { DIR_DOWN, DIR_RIGHT, DIR_UP, DIR_LEFT };
+                if(move_frame < 24) { return sheet_frame(order[(move_frame / 3) % 4], false); }
+                return snep_throw_pose + (side == DIR_LEFT ? snep_throw_pose_offset : 0);
+            }
+            case ANIM_SNEP_THROW_UP:                    // looks up, then throws
+                return sheet_frame(DIR_UP, true) + (move_frame >= 10 ? 2 : 0);
+            case ANIM_SNEP_LEAP:                        // crouch, fly, then the (long) recovery on the ground
+                if(move_frame < 6 || move_frame >= 30) { return sheet_frame(side, false); }
+                return sheet_frame(side, true) + 1;
+            case ANIM_SNEP_SCRATCH:                     // quick alternating punches while he holds on
+            {
+                if(move_frame >= 50) { return sheet_frame(side, false); }
+                return snep_basic_punch[(move_frame / 4) % 2 == 0 ? 2 : 3] + (side == DIR_LEFT ? snep_basic_punch_offset : 0);
+            }
+            case ANIM_SNEP_DAIR:                        // the pogo kick
+                return sheet_frame(side, true) + 1;
             case ANIM_SLAP:
                 if(move_frame < 30) { return waff_jab[(move_frame % 10) * 4 / 10] + (side == DIR_LEFT ? waff_jab_left_ofset : 0); }
                 return sheet_frame(side, false);
             case ANIM_TAIL:
-            case ANIM_KICK:
+            {
+                const int pic = play_once(waff_tail_slam, 7, 4, 0, move_frame);
+                return pic >= 0 ? pic + (side == DIR_LEFT ? waff_tail_slam_left_offset : 0) : sheet_frame(side, false);
+            }
+            case ANIM_RTS:
+            {
+                const int pic = play_once(waff_returntosender,2,3,0,move_frame);
+                return pic >= 0 ? pic + (side == DIR_LEFT ? waff_left_returntosender : 0) : sheet_frame(side,false);
+            }
+            case ANIM_KICK:     return side == DIR_RIGHT ? WAF_KICK : WAF_KICK+7;
             case ANIM_SHOOT:    return sheet_frame(side, true) + 2;
             case ANIM_TAIL_UP:
+            {
+                const int pic = play_once(waff_up_smash, 8,5,0, move_frame);
+                return pic >= 0 ? pic : sheet_frame(side, false);
+            }
             case ANIM_JET_UP:   return WAF_UP_JET;
             case ANIM_SLAM:
+            {
+                const int pic = play_once(waff_down_smash, 8,5,0, move_frame);
+                return pic >= 0 ? pic : sheet_frame(side, false);
+            }
             case ANIM_JET_DOWN: return sheet_frame(DIR_DOWN, true) + 1;
             case ANIM_JET_SIDE: return WAF_DIR_JET;
             case ANIM_SPIN:
@@ -155,6 +265,7 @@ namespace battle
             case ST_ATTACK:   return attack_frame(anim, facing, side, move_frame);            // placeholders for the attack animations
             case ST_SHIELD:   return shield_side;
             case ST_HURT:     return hurt_side;
+            case ST_GRABBED:  return hurt_side;
             case ST_KO:       return ko_side;
             default:          return sheet_frame(side, false);                        // standing (and flinching)
         }
@@ -231,8 +342,10 @@ namespace battle
         int anim_timer = 0;
         int shown_hp = -1;
         bool on_right = false;                     // the opponent's HUD is on the right
+        int hud_dy = 0;                            // the partner's name and health bar sit this many pixels lower than the player's
 
-        FighterView(const FighterDef& def, bool opponent, const char* label, bn::sprite_text_generator& text) :
+        // `partner` = a computer-controlled friend on the player's side: tinted blue, HUD on a second row, drawn behind the player.
+        FighterView(const FighterDef& def, bool opponent, const char* label, bn::sprite_text_generator& text, bool partner = false) :
             sprite(def.sprite->create_sprite(0, 0, pick_frame(ST_IDLE, opponent ? -1 : 1, 0))),   // made at its real first frame: tiles are only loaded once
             shield(bn::sprite_items::shield.create_sprite(0, 0)),
             shield_mat(bn::sprite_affine_mat_ptr::create()),
@@ -244,12 +357,14 @@ namespace battle
             sheet = def.sprite;
             shown_frame = pick_frame(ST_IDLE, opponent ? -1 : 1, 0);
             sprite.set_bg_priority(0);
-            sprite.set_z_order(opponent ? 0 : -1);                    // the player is drawn in front
+            sprite.set_z_order(partner ? 1 : (opponent ? 0 : -1));    // the player is drawn in front, the partner behind everyone
+            hud_dy = partner ? 26 : 0;
 
-            if(opponent)                                              // tint the opponent red so you can tell two Waffles apart
+            if(opponent || partner)                                   // tint the opponent red and the partner blue so you can tell Waffles apart
             {
                 bn::sprite_palette_ptr tint = bn::sprite_palette_ptr::create_new(def.sprite->palette_item());
-                tint.set_fade(bn::color(31, 6, 6), 0.35);
+                if(opponent) { tint.set_fade(bn::color(31, 6, 6), 0.35); }
+                else         { tint.set_fade(bn::color(6, 12, 31), 0.35); }
                 sprite.set_palette(tint);
             }
 
@@ -265,11 +380,11 @@ namespace battle
             hp_fill.set_affine_mat(hp_mat);
 
             const int bar_center_x = opponent ? 96 : -96;             // the bars are 32 pixels wide
-            hp_back.set_position(bar_center_x, -58);
-            hp_fill.set_position(bar_center_x, -58);
+            hp_back.set_position(bar_center_x, -58 + hud_dy);
+            hp_fill.set_position(bar_center_x, -58 + hud_dy);
 
             if(opponent) { text.set_right_alignment(); text.generate(112, -72, label, name); }
-            else         { text.set_left_alignment();  text.generate(-112, -72, label, name); }
+            else         { text.set_left_alignment();  text.generate(-112, -72 + hud_dy, label, name); }
             text.set_center_alignment();
         }
     };
@@ -287,16 +402,19 @@ namespace battle
 
         // +1 = the player won, -1 = the player lost (read it after active() turns false)
         int result() const { return _result; }
-
-        // Call when the screen is fully covered. `covering_blocks` are main.cpp's black blocks: the battle takes
-        // them over (and slides them away). The player always uses the first fighter; `seed` makes the fights differ.
         void start(const FighterDef& player, const FighterDef& enemy, const StageDef& stage,
-                   bn::ivector<bn::sprite_ptr>& covering_blocks, bn::sprite_text_generator& text, unsigned seed)
+                   bn::ivector<bn::sprite_ptr>& covering_blocks, bn::sprite_text_generator& text, unsigned seed,
+                   const FighterDef* partner = nullptr, const Buff& buff = Buff(),
+                   const bn::sprite_item* bystander = nullptr)
         {
             (void)text;
             _stage = &stage;
             _player = &player;
             _enemy = &enemy;
+            _partner = partner;
+            _bystander_item = bystander;
+            _by_rng = (seed * 2246822519u) | 1u;
+            _player_stats = with_buff(player.stats, buff);         // (kept in this object: the fight only points at it)
             _result = 0;
             events = 0;
 
@@ -305,7 +423,7 @@ namespace battle
             _wipe = 0;
             move_blocks();
 
-            _fight.start(stage.geom, player.stats, enemy.stats, seed);
+            _fight.start(stage.geom, _player_stats, enemy.stats, seed, partner ? &partner->stats : nullptr);
 
             // The stage itself is built on the NEXT frame (see PH_SETUP): the overworld was just thrown away, and
             // video memory is much happier if the new pictures are loaded a frame later instead of in the same one. YAY :3
@@ -348,7 +466,7 @@ namespace battle
 
                 case PH_FIGHT:
                 {
-                    const Input in[2] = { read_player_input(), _fight.think(1) };
+                    const Input in[3] = { read_player_input(), _fight.think(1), _fight.count > 2 ? _fight.think(2) : Input() };
                     _fight.step(in);
                     collect_events();
 
@@ -358,18 +476,40 @@ namespace battle
                     {
                         _result = _fight.winner == 0 ? 1 : -1;
                         _phase = PH_RESULT;
-                        _timer = 150;
-                        show_banner(text, _result > 0 ? "GAME!" : "GAY!");
+                        _timer = RESULT_FRAMES;                         // (the GAME! banner appears during PH_RESULT)
                     }
                     break;
                 }
 
                 case PH_RESULT:
                 {
-                    const Input in[2] = {};                             // nobody can act any more, but things still settle
-                    _fight.step(in);
+                    // THE KO SCREEN (like Smash Ultimate) :3
+                    // while the loser flies away, and only then the banner. A time-out (nobody was knocked out) skips it.
+                    const bool knockout = _fight.f[0].hp <= 0 || _fight.f[1].hp <= 0;
+                    const int t = RESULT_FRAMES - _timer;               // frames since the end: 0, 1, 2...
+                    const bool frozen = knockout && t < KO_FREEZE;
+                    const bool slow = knockout && t < KO_SLOW_END;
+
+                    if(!frozen && (!slow || t % KO_SLOW_RATE == 0))
+                    {
+                        const Input in[3] = {};                         // nobody can act any more, but things still settle
+                        _fight.step(in);
+                    }
+
+                    _shake = 0;
+                    if(slow)                                            // the screen shakes, less and less
+                    {
+                        const int power = 6 - t * 6 / KO_SLOW_END;
+                        _shake = (t % 2 == 0) ? power : -power;
+                    }
+                    if(knockout && t <= KO_FLASH) { set_flash(bn::fixed(KO_FLASH - t) / KO_FLASH); }
+
+                    if(t == (knockout ? KO_BANNER : 0)) { show_banner(text, _result > 0 ? "GAME!" : "GAY!");}
+
                     if(--_timer <= 0)
                     {
+                        _shake = 0;
+                        set_flash(0);
                         _banner.clear();
                         make_blocks();
                         _wipe = WIPE_DISTANCE;                          // the blocks come back from the right
@@ -412,6 +552,13 @@ namespace battle
         static constexpr int WIPE_SPEED = 10;           // same as the overworld transition
         static constexpr int WIPE_DISTANCE = 248;
 
+        static constexpr int RESULT_FRAMES = 200;       // how long the result screen lasts
+        static constexpr int KO_FLASH = 12;             // the white flash fades out over this many frames
+        static constexpr int KO_FREEZE = 10;            // the world is frozen for this many frames after the knockout
+        static constexpr int KO_SLOW_END = 70;          // slow motion until this frame...
+        static constexpr int KO_SLOW_RATE = 3;          // ...where the world only moves every 3rd frame
+        static constexpr int KO_BANNER = 40;            // the frame GAME! appears on
+
         struct Piece
         {
             bn::sprite_ptr sprite;
@@ -453,6 +600,18 @@ namespace battle
 
             _views[0] = FighterView(*_player, false, "YOU", text);
             _views[1] = FighterView(*_enemy, true, _enemy->name, text);
+            if(_partner) { _views[2] = FighterView(*_partner, false, _partner->name, text, true); }
+            for(int k = 0; k < MAX_PROJECTILES; ++k) { _label[k].clear(); _label_id[k] = -1; }
+
+            if(_bystander_item)                                       // the follower that can't fight: it just hangs around
+            {
+                _bystander = _bystander_item->create_sprite(0, 0, sheet_frame(DIR_DOWN, false));
+                _bystander->set_bg_priority(0);
+                _bystander->set_z_order(3);                           // behind every fighter, in front of the floor
+                _by_shown = sheet_frame(DIR_DOWN, false);
+                _by_x16 = (_stage->geom.length / 2) * FP;
+                _by_timer = 1;
+            }
 
             _cam_x = camera_target();
             draw(text);
@@ -493,6 +652,13 @@ namespace battle
             for(bn::sprite_ptr& s : _banner) { s.set_bg_priority(0); s.set_z_order(-20); }
         }
 
+        // a flash over the whole screen: 1 = pure white, 0 = nothing
+        void set_flash(bn::fixed intensity)
+        {
+            bn::bg_palettes::set_fade(bn::color(31, 31, 31), intensity);
+            bn::sprite_palettes::set_fade(bn::color(31, 31, 31), intensity);
+        }
+
         void collect_events()
         {
             const Events& e = _fight.ev;
@@ -502,6 +668,7 @@ namespace battle
             if(e.absorb)  { events |= EV_ABSORB; }
             if(e.boom)    { events |= EV_BOOM; }
             if(e.hit)     { events |= EV_HIT; }
+            if(e.hitsmash){ events |= EV_SMASH;}
             if(e.blocked) { events |= EV_BLOCKED; }
             if(e.jump)    { events |= EV_JUMP; }
             if(e.ko)      { events |= EV_KO; }
@@ -512,6 +679,9 @@ namespace battle
         {
             _views[0].reset();
             _views[1].reset();
+            _views[2].reset();
+            _bystander.reset();
+            for(int k = 0; k < MAX_PROJECTILES; ++k) { _label[k].clear(); _label_id[k] = -1; }
             for(bn::optional<bn::sprite_ptr>& p : _proj) { p.reset(); }
             for(bn::optional<bn::sprite_ptr>& e : _fx) { e.reset(); }
             _floor.clear();
@@ -538,7 +708,7 @@ namespace battle
         void draw(bn::sprite_text_generator& text)
         {
             _cam_x += (camera_target() - _cam_x) / 6;                   // a smooth follow
-            const bn::fixed cam = _cam_x;
+            const bn::fixed cam = _cam_x + _shake;                      // (_shake is only used by the KO screen)
 
             // parallax: far layers move slowly, near layers keep up with the camera
             for(int i = 0; i < _stage->layer_count; ++i)
@@ -559,7 +729,9 @@ namespace battle
                 piece.sprite.set_position(bn::fixed(piece.wx) - cam, piece.wy - 80);
             }
 
-            for(int i = 0; i < 2; ++i)
+            draw_bystander(cam);
+
+            for(int i = 0; i < 3; ++i)
             {
                 if(_views[i]) { draw_fighter(i, *_views[i], _fight.f[i], cam, text); }
             }
@@ -567,7 +739,31 @@ namespace battle
             for(int k = 0; k < MAX_PROJECTILES; ++k)
             {
                 const Projectile& p = _fight.proj[k];
-                if(!p.active) { _proj[k].reset(); continue; }
+                if(!p.active) { _proj[k].reset(); _label[k].clear(); _label_id[k] = -1; continue; }
+
+                if(p.shot.label)                                          // Filip's words and thrown objects: drawn as text for now
+                {
+                    _proj[k].reset();
+                    if(_label_id[k] != p.id)                              // a new one: make its letters once (centered on 0, 0)
+                    {
+                        _label_id[k] = p.id;
+                        _label[k].clear();
+                        _label_dx[k].clear();
+                        text.set_center_alignment();
+                        text.generate(0, 0, p.shot.label, _label[k]);
+                        for(bn::sprite_ptr& letter : _label[k])
+                        {
+                            _label_dx[k].push_back(letter.x());
+                            letter.set_bg_priority(0);
+                            letter.set_z_order(-2);
+                        }
+                    }
+                    for(int j = 0; j < _label[k].size(); ++j)
+                    {
+                        _label[k][j].set_position(_label_dx[k][j] + (bn::fixed(p.x16 / FP) - cam), (p.y16 / FP) - 80);
+                    }
+                    continue;
+                }
 
                 const ProjArt art = projectile_art(p.shot.kind);
                 if(!_proj[k])
@@ -597,6 +793,42 @@ namespace battle
                 _fx[k]->set_position(bn::fixed(e.x16 / FP) - cam, (e.y16 / FP) - 80);
                 _fx[k]->set_tiles(bn::sprite_items::hit_spark.tiles_item(), frame);
             }
+        }
+
+        // The follower that can't fight wanders left and right behind the fighters: a few steps, a rest, a few steps...
+        // (it only decorates the stage: nothing can hit it and it can't hit anything)
+        void draw_bystander(bn::fixed cam)
+        {
+            if(!_bystander) { return; }
+
+            if(--_by_timer <= 0)                                      // decide what to do next
+            {
+                _by_rng ^= _by_rng << 13;
+                _by_rng ^= _by_rng >> 17;
+                _by_rng ^= _by_rng << 5;
+                _by_walking = (_by_rng % 100) < 70;
+                if(_by_walking) { _by_dir = ((_by_rng >> 8) & 1) ? DIR_RIGHT : DIR_LEFT; }
+                _by_timer = 40 + int((_by_rng >> 12) % 70);
+            }
+
+            if(_by_walking)
+            {
+                _by_x16 += (_by_dir == DIR_RIGHT ? 1 : -1) * (FP / 2);            // half a pixel per frame
+                const int min_x16 = 16 * FP;
+                const int max_x16 = (_stage->geom.length - 16) * FP;
+                if(_by_x16 < min_x16) { _by_x16 = min_x16; _by_dir = DIR_RIGHT; }
+                if(_by_x16 > max_x16) { _by_x16 = max_x16; _by_dir = DIR_LEFT; }
+                if(++_by_anim >= 8) { _by_anim = 0; _by_step = (_by_step + 1) % 4; }
+            }
+            else { _by_anim = 0; _by_step = 0; }
+
+            const int frame = sheet_frame(_by_dir, false) + (_by_walking ? walk_frames[_by_step] : 0);
+            if(frame != _by_shown)
+            {
+                _by_shown = frame;
+                _bystander->set_tiles(_bystander_item->tiles_item(), frame);
+            }
+            _bystander->set_position(bn::fixed(_by_x16 / FP) - cam, _stage->geom.ground_y - SPRITE_FEET - 80);       // feet on the ground, same line as the fighters
         }
 
         void draw_fighter(int index, FighterView& v, const Fighter& f, bn::fixed cam, bn::sprite_text_generator& text)
@@ -660,7 +892,7 @@ namespace battle
                 char number[8];
                 format_int(f.hp, number);
                 if(v.on_right) { text.set_right_alignment(); text.generate(72, -58, number, v.hp_text); }
-                else           { text.set_left_alignment();  text.generate(-72, -58, number, v.hp_text); }
+                else           { text.set_left_alignment();  text.generate(-72, -58 + v.hud_dy, number, v.hp_text); }
                 text.set_center_alignment();
             }
         }
@@ -692,7 +924,7 @@ namespace battle
 
             // swipes: until you draw real attack animations, a little slash shows where each melee hitbox is
             int used = 0;
-            if(move && move->drive.end <= move->drive.start && move->anim != ANIM_SLAP)
+            if(move && move->drive.end <= move->drive.start)
             {
                 for(int k = 0; k < move->hit_count && used < 2; ++k)
                 {
@@ -727,7 +959,14 @@ namespace battle
                     v.held->set_bg_priority(0);
                     v.held->set_z_order(-6);
                 }
-                v.held->set_position(bn::fixed(fx) - cam, fy - s.body_h - 12 - 80);
+                if(move && (move->flags & MF_ORBIT_HELD))                 // Filip's counter: the shot spins around him
+                {
+                    static const int orbit_x[8] = { 16, 11, 0, -11, -16, -11, 0, 11 };
+                    static const int orbit_y[8] = { 0, -11, -16, -11, 0, 11, 16, 11 };
+                    const int o = (f.move_frame / 3) % 8;
+                    v.held->set_position(bn::fixed(fx + orbit_x[o]) - cam, fy - s.body_h / 2 + orbit_y[o] - 80);
+                }
+                else { v.held->set_position(bn::fixed(fx) - cam, fy - s.body_h - 12 - 80); }
                 v.held->set_horizontal_flip(f.facing < 0);
             }
             else { v.held.reset(); }
@@ -741,16 +980,27 @@ namespace battle
         int _result = 0;
         bn::fixed _wipe = 0;
         bn::fixed _cam_x = 0;
+        bn::fixed _shake = 0;
 
         const StageDef* _stage = nullptr;
         const FighterDef* _player = nullptr;
         const FighterDef* _enemy = nullptr;
+        const FighterDef* _partner = nullptr;
+        FighterStats _player_stats = {};                // the player's stats WITH the buff on top
         Fight _fight;
 
         bn::optional<bn::regular_bg_ptr> _bgs[3];
         bn::vector<bn::sprite_ptr, FLOOR_TILES> _floor;
         bn::vector<Piece, 24> _pieces;
-        bn::optional<FighterView> _views[2];
+        bn::vector<bn::sprite_ptr, 8> _label[MAX_PROJECTILES];      // the letters of a shot that is shown as text
+        bn::vector<bn::fixed, 8> _label_dx[MAX_PROJECTILES];        // where each letter sits relative to the middle of the shot
+        int _label_id[MAX_PROJECTILES] = {};                        // which shot the letters belong to (set to -1 when a battle starts)
+        const bn::sprite_item* _bystander_item = nullptr;   // a follower that can't fight (see start())
+        bn::optional<bn::sprite_ptr> _bystander;
+        int _by_x16 = 0, _by_dir = DIR_DOWN, _by_timer = 0, _by_step = 0, _by_anim = 0, _by_shown = -1;
+        bool _by_walking = false;
+        unsigned _by_rng = 1;
+        bn::optional<FighterView> _views[3];            // 0 = you, 1 = the opponent, 2 = your partner
         bn::optional<bn::sprite_ptr> _proj[MAX_PROJECTILES];
         bn::optional<bn::sprite_ptr> _fx[MAX_EFFECTS];
         bn::vector<bn::sprite_ptr, 12> _blocks;
