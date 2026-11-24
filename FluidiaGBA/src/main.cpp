@@ -1,4 +1,4 @@
-#define GAME_VER "0.4.2p"
+#define GAME_VER "0.4.4p"
 #include "bn_core.h"
 #include "bn_color.h"
 #include "bn_bg_palettes.h"
@@ -45,6 +45,13 @@
 #include "world2_map.h"             // namespace world2
 #include "house_interior_map.h"     // namespace house_interior
 #include "demo_map.h"
+#include "bn_sprite_items_battle_floor_house.h"
+#include "bn_sprite_items_battle_platform_house.h"
+#include "bn_sprite_items_battle_floor_sand.h"
+#include "bn_sprite_items_battle_platform_sand.h"
+#include "bn_affine_bg_items_battle_top_grass.h"
+#include "bn_affine_bg_items_battle_top_wood.h"
+#include "bn_regular_bg_items_battle_backdrop_16.h"    // with your other includes
 
 
 
@@ -312,19 +319,23 @@ namespace
 
     constexpr battle::StageDef world_stage =
     {
-        //  length, floor, platforms, count, spawn (0 = automatic)
         { 600, 128, world_platforms, 2, 0, 0 },
-        { { &bn::regular_bg_items::layer_2_mountains, 25 }, { &bn::regular_bg_items::layer_3_hills, 50 }, { &bn::regular_bg_items::layer_4_forest, 100 } }, 3,
+        { { &bn::regular_bg_items::battle_backdrop_16, 50 }, { &bn::regular_bg_items::layer_4_forest, 100, true } }, 2,
+        nullptr, nullptr,                                  // floor/platform art: default grass + wood
+        &bn::affine_bg_items::battle_top_grass,            // the 3D top
     };
     constexpr battle::StageDef world2_stage =
     {
         { 480, 128, world2_platforms, 1, 0, 0 },
         { { &bn::regular_bg_items::layer_2_mountains, 25 }, { &bn::regular_bg_items::layer_3_hills, 60 } }, 2,
+        &bn::sprite_items::battle_floor_sand, &bn::sprite_items::battle_platform_sand,
     };
-    constexpr battle::StageDef house_stage =                       // indoors: one screen wide, no backgrounds
+    constexpr battle::StageDef house_stage =
     {
         { 300, 128, house_platforms, 1, 0, 0 },
         {{ &bn::regular_bg_items::house_bg, 50}}, 1,
+        &bn::sprite_items::battle_floor_house, &bn::sprite_items::battle_platform_house,
+        &bn::affine_bg_items::battle_top_wood,
     };
     constexpr battle::StageDef world3_stage =
     {

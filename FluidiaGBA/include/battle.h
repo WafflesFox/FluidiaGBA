@@ -44,6 +44,15 @@
 #include "bn_sprite_items_swipe.h"
 #include "bn_sprite_items_hit_spark.h"
 
+#include "bn_display.h"
+#include "bn_affine_bg_item.h"
+#include "bn_affine_bg_ptr.h"
+#include "bn_rect_window.h"
+#include "bn_window.h"
+#include "bn_affine_bg_pa_register_hbe_ptr.h"
+#include "bn_affine_bg_dx_register_hbe_ptr.h"
+#include "bn_affine_bg_dy_register_hbe_ptr.h"
+
 #include "battle_logic.h"
 
 namespace battle
@@ -67,6 +76,7 @@ namespace battle
     {
         const bn::regular_bg_item* item;
         int speed_percent;
+        bool in_front = false;
     };
 
     // A stage = the shape of the ground (see StageGeom) + up to 3 background layers.
@@ -75,6 +85,9 @@ namespace battle
         StageGeom geom;
         ParallaxLayer layers[3];
         int layer_count;
+        const bn::sprite_item* floor_item = nullptr;      // nullptr = the default grass floor
+        const bn::sprite_item* platform_item = nullptr;   // nullptr = the default wood platform
+        const bn::affine_bg_item* top_item = nullptr;   // the picture on top of the 3D ground (nullptr = flat 2D stage)
     };
 
     // ---- things main.cpp can react to (sound effects) ----
@@ -551,6 +564,9 @@ namespace battle
         static constexpr int FLOOR_TILES = 5;           // 5 x 64 pixels: always enough to cover the screen while scrolling
         static constexpr int WIPE_SPEED = 10;           // same as the overworld transition
         static constexpr int WIPE_DISTANCE = 248;
+        static constexpr int FLOOR_DEPTH = 64;     // was 40
+        static constexpr int FLOOR_ROWS = 32;      // unchanged
+        static constexpr int FLOOR_FOCAL = 100;    // was 60
 
         static constexpr int RESULT_FRAMES = 200;       // how long the result screen lasts
         static constexpr int KO_FLASH = 12;             // the white flash fades out over this many frames
@@ -571,16 +587,47 @@ namespace battle
         void build_scene(bn::sprite_text_generator& text)
         {
             const StageDef& stage = *_stage;
+            const bn::sprite_item& floor_art    = stage.floor_item    ? *stage.floor_item    : bn::sprite_items::battle_floor;
+            const bn::sprite_item& platform_art = stage.platform_item ? *stage.platform_item : bn::sprite_items::battle_platform;
 
             for(int i = 0; i < stage.layer_count; ++i)
             {
                 _bgs[i] = stage.layers[i].item->create_bg(0, 0);
-                _bgs[i]->set_priority(3 - i);                         // 3 = the farthest back
+                _bgs[i]->set_priority(stage.layers[i].in_front ? 0 : 3 - i);
             }
+            if(stage.top_item)
+            {
+            const int front = stage.geom.ground_y;           // screen row where the front edge sits
+            const int horizon = front - FLOOR_DEPTH;         // the row where the ground would vanish
+
+            for(int row = 0; row < bn::display::height(); ++row)
+            {
+                int d = row - horizon;                       // distance below the horizon, in rows
+                if(d < 1) { d = 1; }                         // never divide by zero (those rows are hidden anyway)
+                _floor_pa[row] = int16_t(FLOOR_DEPTH * 256 / d);
+                _floor_dy[row] = FLOOR_FOCAL * FLOOR_DEPTH * 256 / d;
+            }
+
+            _floor_bg = stage.top_item->create_bg(0, 0);
+            _floor_bg->set_priority(1);                      // behind the sprites (0), in front of the parallax layers
+            _floor_bg->set_wrapping_enabled(true);
+
+            update_floor_dx(_cam_x);                         // fill the first dx values before the effects read them
+            _floor_pa_hbe = bn::affine_bg_pa_register_hbe_ptr::create(*_floor_bg, _floor_pa);
+            _floor_dx_hbe = bn::affine_bg_dx_register_hbe_ptr::create(*_floor_bg, _floor_dx);
+            _floor_dy_hbe = bn::affine_bg_dy_register_hbe_ptr::create(*_floor_bg, _floor_dy);
+
+            // a window so the floor only shows inside the plane's rows (not up in the sky)
+            bn::rect_window win = bn::rect_window::internal();
+            win.set_boundaries(front - FLOOR_ROWS - 80, -120, front - 80, 120);
+            win.set_visible(true);
+            bn::window::outside().set_show_bg(*_floor_bg, false);
+        }
 
             for(int i = 0; i < FLOOR_TILES; ++i)
             {
-                bn::sprite_ptr tile = bn::sprite_items::battle_floor.create_sprite(0, 0);
+                // bn::sprite_ptr tile = bn::sprite_items::battle_floor.create_sprite(0, 0);
+                bn::sprite_ptr tile  = floor_art.create_sprite(0, 0);
                 tile.set_bg_priority(0);
                 tile.set_z_order(10);
                 _floor.push_back(tile);
@@ -591,7 +638,8 @@ namespace battle
                 const Platform& pl = stage.geom.platforms[k];
                 for(int j = 0; j < pl.w / 32 && !_pieces.full(); ++j)  // platforms are built from 32-pixel pieces
                 {
-                    bn::sprite_ptr piece = bn::sprite_items::battle_platform.create_sprite(0, 0);
+                    // bn::sprite_ptr piece = bn::sprite_items::battle_platform.create_sprite(0, 0);
+                    bn::sprite_ptr piece = platform_art.create_sprite(0, 0); 
                     piece.set_bg_priority(0);
                     piece.set_z_order(10);
                     _pieces.push_back(Piece{ piece, pl.x + 16 + j * 32, pl.y + 4 });
@@ -685,6 +733,11 @@ namespace battle
             for(bn::optional<bn::sprite_ptr>& p : _proj) { p.reset(); }
             for(bn::optional<bn::sprite_ptr>& e : _fx) { e.reset(); }
             _floor.clear();
+            _floor_pa_hbe.reset();
+            _floor_dx_hbe.reset();
+            _floor_dy_hbe.reset();
+            _floor_bg.reset();
+            bn::rect_window::internal().set_visible(false);
             _pieces.clear();
             _banner.clear();
             for(bn::optional<bn::regular_bg_ptr>& bg : _bgs) { bg.reset(); }
@@ -714,6 +767,11 @@ namespace battle
             for(int i = 0; i < _stage->layer_count; ++i)
             {
                 _bgs[i]->set_x(-(cam - 120) * _stage->layers[i].speed_percent / 100);
+            }
+            if(_floor_bg)
+            {
+                update_floor_dx(cam);
+                _floor_dx_hbe->reload_values_ref();                   // only dx changes every frame
             }
 
             // the floor: five tiles that hop along so there is always floor under the screen
@@ -792,6 +850,16 @@ namespace battle
                 }
                 _fx[k]->set_position(bn::fixed(e.x16 / FP) - cam, (e.y16 / FP) - 80);
                 _fx[k]->set_tiles(bn::sprite_items::hit_spark.tiles_item(), frame);
+            }
+        }
+        // fills the per-row start positions for the camera: the camera is the picture position that sits at the screen centre
+        void update_floor_dx(bn::fixed cam)
+        {
+            const int front = _stage->geom.ground_y;
+            const int cam_texels = cam.data() >> 4;               // 12 fractional bits -> the 8 the hardware uses
+            for(int row = front - FLOOR_ROWS; row < front; ++row)
+            {
+                _floor_dx[row] = cam_texels - _floor_pa[row] * 120;   // 120 = half the screen width
             }
         }
 
@@ -990,6 +1058,13 @@ namespace battle
         Fight _fight;
 
         bn::optional<bn::regular_bg_ptr> _bgs[3];
+        bn::optional<bn::affine_bg_ptr> _floor_bg;
+        bn::optional<bn::affine_bg_pa_register_hbe_ptr> _floor_pa_hbe;
+        bn::optional<bn::affine_bg_dx_register_hbe_ptr> _floor_dx_hbe;
+        bn::optional<bn::affine_bg_dy_register_hbe_ptr> _floor_dy_hbe;
+        int16_t _floor_pa[bn::display::height()] = {};   // horizontal zoom of each screen row
+        int _floor_dx[bn::display::height()] = {};       // where each row starts in the picture (moves with the camera)
+        int _floor_dy[bn::display::height()] = {};       // how far "into" the picture each row looks
         bn::vector<bn::sprite_ptr, FLOOR_TILES> _floor;
         bn::vector<Piece, 24> _pieces;
         bn::vector<bn::sprite_ptr, 8> _label[MAX_PROJECTILES];      // the letters of a shot that is shown as text

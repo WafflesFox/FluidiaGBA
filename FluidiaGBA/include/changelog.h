@@ -5,6 +5,7 @@ namespace phone
 {
     constexpr const char* changelog_entries[] =
     {
+        "0.4.4p: Added 3D environment for battle scenes.",
         "0.4.2p: Almost Finshed adding Filip as a fighter.",
         "0.4.1p: Working on Filip as a fighter.",
         "0.4.0p: Finished Waffles as fighter.",
