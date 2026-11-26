@@ -41,7 +41,7 @@ namespace battle
 
     // B: Water Gun. (Same numbers as the old single move: 8 frames of startup, 14 of recovery.)
     constexpr Move water_gun = Move("Water Gun", 22, ANIM_SHOOT)
-        .fires(8, Shot().of(PROJ_WATER).dmg(2).fly(fp(4), 70).size(12, 8).spawn(12, 14).launch(fp(0), 0).stun(0));
+        .fires(8, Shot().of(PROJ_WATER).dmg(2).fly(fp(4), 70).size(12, 8).spawn(12, 14).launch(fp(0), 0).stun(0).heals_ally(2));
 
     // B + left/right: Aqua Jet. Charges for 8 frames, then dashes ~80 pixels at high speed. It steers a little toward the
     // opponent if they are in front. It ends the moment it hits.
@@ -51,6 +51,10 @@ namespace battle
         .hit(Hitbox().frames(8, 23).at(2, 13).size(22, 22).dmg(7).launch(fp(3.0), fp(-2.5)).stun(20));
 
     // B + up: the same, but straight up. More damage than the sideways one.
+    // Hold B + Up: charges a gauge; at full charge spawns a Water Clone of the enemy (10% HP, 50% dmg)
+    constexpr Move waffle_up_clone = Move("Water Clone", 1000, ANIM_WAF_CHARGE)
+        .charge_clone();
+
     constexpr Move aqua_jet_up = Move("Aqua Jet Up", 38, ANIM_JET_UP)
         .once_per_jump()
         .dash(Drive().frames(6, 21).speed(0, fp(-5.0)).stops_on_hit())
@@ -124,13 +128,14 @@ namespace battle
     // SELECT (when Final Smash is ready): lunging uppercut. If it hits, starts Fire Blast!
     constexpr Move waffle_fs_start = Move("Fire Uppercut", 32, ANIM_TAIL_UP)
         .dash(Drive().frames(4, 13).speed(fp(3.8), fp(-1.2)).stops_on_hit())
-        .hit(Hitbox().frames(5, 14).at(16, 16).size(24, 28).dmg(6).launch(0, fp(-3.5)).stun(22))
-        .starts_final_smash(FS_WAFFLE_FIRE);
+        .hit(Hitbox().frames(5, 14).at(16, 16).size(24, 28).dmg(6).launch(0, fp(-3.5)).stun(22).hits_teammates())
+        .starts_final_smash(FS_WAFFLE_FIRE)
+        .ally_fs(FS_WAFFLE_MEAL);
 
     constexpr MoveSet waffle_moveset = MoveSet()
         .set(SLOT_SPECIAL,      &water_gun)         // B
         .set(SLOT_SPECIAL_SIDE, &aqua_jet)          // B + left/right
-        .set(SLOT_SPECIAL_UP,   &aqua_jet_up)       // B + up
+        .set(SLOT_SPECIAL_UP,   &waffle_up_clone)       // B + up
         .set(SLOT_SPECIAL_DOWN, &fox_thief)         // B + down
         .set(SLOT_JAB,          &jab)               // A
         .set(SLOT_FSMASH,       &tail_slam)         // A + left/right
@@ -174,12 +179,12 @@ namespace battle
     // ---- B: INSULT. A random word flies out. No damage and no knockback, but the victim is stunned. ----
     constexpr Shot words[] =
     {
-        Shot().dmg(0).fly(fp(1.0), 60).size(22, 10).spawn(12, 16).stun(50).labeled("LOSER"),
-        Shot().dmg(0).fly(fp(1.0), 60).size(18, 10).spawn(12, 16).stun(50).labeled("NOOB"),
-        Shot().dmg(0).fly(fp(1.0), 60).size(22, 10).spawn(12, 16).stun(50).labeled("TRASH"),
-        Shot().dmg(0).fly(fp(1.0), 60).size(18, 10).spawn(12, 16).stun(50).labeled("IDIOT"),
+        Shot().dmg(0).fly(fp(1.0), 60).size(22, 10).spawn(12, 16).stun(30).labeled("LOSER"),
+        Shot().dmg(0).fly(fp(1.0), 60).size(18, 10).spawn(12, 16).stun(30).labeled("NOOB"),
+        Shot().dmg(0).fly(fp(1.0), 60).size(22, 10).spawn(12, 16).stun(35).labeled("TRASH"),
+        Shot().dmg(0).fly(fp(1.0), 60).size(18, 10).spawn(12, 16).stun(40).labeled("IDIOT"),
         Shot().dmg(0).fly(fp(1.0), 60).size(18, 10).spawn(12, 16).stun(50).labeled("FAGGOT"),
-        Shot().dmg(0).fly(fp(1.0), 60).size(24, 10).spawn(12, 16).stun(50).labeled("CRINGE"),
+        Shot().dmg(0).fly(fp(1.0), 60).size(24, 10).spawn(12, 16).stun(60).labeled("CRINGE"),
     };
     constexpr Move insult = Move("Insult", 26, ANIM_SHOOT)
         .fires_random(8, words, 6);
@@ -206,7 +211,7 @@ namespace battle
         Shot().dmg(4).arc(fp(1.8), -fp(4.4), 3, 90).size(9, 9).spawn(6, 24).launch(fp(1.5), fp(-1.5)).stun(14).of(PROJ_JUNK_APPLE),
         Shot().dmg(8).arc(fp(1.5), -fp(4.6), 4, 90).size(18, 6).spawn(6, 24).launch(fp(3.5), fp(-2.5)).stun(18).of(PROJ_JUNK_BAT),
         Shot().dmg(3).arc(fp(1.6), -fp(4.6), 4, 90).size(14, 10).spawn(6, 24).launch(fp(1.0), fp(-1.0)).stun(10).explodes(9).of(PROJ_JUNK_LAPTOP),
-        Shot().dmg(12).arc(fp(1.2), -fp(4.2), 4, 90).size(12, 12).spawn(6, 24).launch(fp(4.0), fp(-3.0)).stun(24).of(PROJ_JUNK_BALL),
+        Shot().dmg(25).arc(fp(1.2), -fp(4.2), 4, 90).size(12, 12).spawn(6, 24).launch(fp(4.0), fp(-3.0)).stun(24).of(PROJ_JUNK_BALL),
     };
     constexpr Move throw_junk = Move("Throw Junk", 40, ANIM_SNEP_THROW_UP)
         .fires_random(10, junk, 5);
@@ -237,6 +242,12 @@ namespace battle
         .hit(Hitbox().frames(6, 34).at(4, 4).size(16, 20).dmg(6).launch(fp(1.0), fp(2.5)).stun(16).bounces(fp(4.4)))
         .ends_on_landing(28);
 
+    // SELECT (when Final Smash is ready): dashes forward. If it hits, starts Ring Drop!
+    constexpr Move filip_fs_start = Move("Ring Drop", 34, ANIM_SNEP_LEAP)
+        .dash(Drive().frames(4, 14).speed(fp(5.2), 0).stops_on_hit())
+        .hit(Hitbox().frames(5, 14).at(14, 14).size(24, 24).dmg(6).launch(fp(2.0), fp(-2.5)).stun(22))
+        .starts_final_smash(FS_FILIP_DROP);
+
     constexpr MoveSet snep_moveset = MoveSet()
         .set(SLOT_SPECIAL,      &insult)            // B
         .set(SLOT_SPECIAL_SIDE, &pounce)            // B + left/right
@@ -248,6 +259,164 @@ namespace battle
         .set(SLOT_DSMASH,       &double_punch)      // A + down
         .set(SLOT_DAIR,         &pogo_kick);        // A in the air + down
         // (no aerials for the other directions yet: leave a slot out = no such move)
+
+    // ============================================================================================
+    // UMBREON
+    // ============================================================================================
+
+    // B in air: place block beneath feet
+    constexpr Move umb_place_block = Move("Place Block", 18, ANIM_UMB_PLACE)
+        .place_block(4);
+
+    // B on crafting table (with materials): craft Iron (1 mat) or Diamond (2 mats) weapon
+    constexpr Move umb_craft = Move("Craft Weapon", 24, ANIM_UMB_PLACE)
+        .craft_weapon(10)
+        .swaps_when_holding(&umb_place_block);
+
+    // B on ground: mine for materials (+1 material, close pickaxe swing)
+    constexpr Move umb_mine_move = Move("Mine", 24, ANIM_UMB_MINE)
+        .mine_mat(12)
+        .hit(Hitbox().frames(8, 14).at(14, 12).size(16, 14).dmg(4).launch(fp(1.2), fp(-1.0)).stun(12))
+        .swaps_when_holding(&umb_craft);
+
+    // Side B: ride on a pig with carrot fishing rod (jump anytime to get off; knocked off if pig dies)
+    constexpr Move umb_pig_ride = Move("Fox Ride", 10, ANIM_STAND)
+        .mount_pig(4);
+
+    // Up B: shoot three fireballs upwards and diagonally
+    constexpr Move umb_fireballs = Move("Fireball Trio", 28, ANIM_UMB_THROW)
+        .fires(8, Shot().of(PROJ_FIREBALL).dmg(3).arc(0, -fp(3.6), 0, 48).fan(fp(2.4))
+                        .size(12, 12).spawn(0, 24).launch(fp(1.5), fp(-3.2)).stun(16));
+
+    // Down B: place TNT (explodes when touched by anyone, even Umbreon)
+    constexpr Move umb_tnt = Move("Place TNT", 24, ANIM_UMB_PLACE)
+        .place_tnt(10);
+
+    // A: throw boomerang
+    constexpr Move umb_boomerang = Move("Boomerang", 26, ANIM_UMB_THROW)
+        .fires(7, Shot().of(PROJ_BOOMERANG).dmg(4).fly(fp(4.5), 90).boomerang(2)
+                        .size(14, 12).spawn(12, 14).launch(fp(1.8), fp(-1.8)).stun(14).weapon());
+
+    // Side A: swing sword with full force
+    constexpr Move umb_sword_full = Move("Sword Slash", 38, ANIM_UMB_SLASH)
+        .hit(Hitbox().frames(10, 17).at(20, 14).size(30, 22).dmg(12).launch(fp(4.8), fp(-3.2)).stun(24).weapon());
+
+    // Up A: shoot bow upwards
+    constexpr Move umb_bow_up = Move("Bow Shot", 30, ANIM_UMB_BOW)
+        .fires(12, Shot().of(PROJ_ARROW).dmg(8).arc(0, -fp(5.4), 2, 95)
+                        .size(8, 16).spawn(0, 26).launch(fp(0.5), fp(-4.0)).stun(20).weapon());
+
+    // Down A: smash both sides with pickaxe
+    constexpr Move umb_pickaxe_smash = Move("Pickaxe Smash", 42, ANIM_UMB_MINE)
+        .hit(Hitbox().frames(10, 16).at(20, 10).size(24, 18).dmg(6).launch(fp(3.6), fp(-3.2)).stun(22).weapon())
+        .hit(Hitbox().frames(10, 16).at(-20, 10).size(24, 18).dmg(5).launch(fp(3.6), fp(-3.2)).stun(22).weapon());
+
+    // A in air: simple sword slash
+    constexpr Move umb_air_slash = Move("Air Slash", 24, ANIM_UMB_SLASH)
+        .hit(Hitbox().frames(5, 13).at(16, 14).size(26, 20).dmg(3).launch(fp(2.6), fp(-1.6)).stun(16).weapon());
+
+    // Final Smash: throw a minecart -> Minecraft House explosion cutscene!
+    constexpr Move umb_fs_start = Move("Minecart Throw", 32, ANIM_UMB_THROW)
+        .fires(8, Shot().of(PROJ_MINECART).dmg(6).fly(fp(5.0), 48).size(26, 16).spawn(16, 10)
+                        .launch(fp(2.0), fp(-2.0)).stun(20).steal_proof().starts_final_smash(FS_UMB_MINECART));
+
+    constexpr MoveSet umb_moveset = MoveSet()
+        .set(SLOT_SPECIAL,      &umb_mine_move)
+        .set(SLOT_SPECIAL_SIDE, &umb_pig_ride)
+        .set(SLOT_SPECIAL_UP,   &umb_fireballs)
+        .set(SLOT_SPECIAL_DOWN, &umb_tnt)
+        .set(SLOT_JAB,          &umb_boomerang)
+        .set(SLOT_FSMASH,       &umb_sword_full)
+        .set(SLOT_USMASH,       &umb_bow_up)
+        .set(SLOT_DSMASH,       &umb_pickaxe_smash)
+        .set(SLOT_NAIR,         &umb_air_slash)
+        .set(SLOT_FAIR,         &umb_air_slash)
+        .set(SLOT_BAIR,         &umb_air_slash)
+        .set(SLOT_UAIR,         &umb_air_slash)
+        .set(SLOT_DAIR,         &umb_air_slash);
+    // ============================================================================================
+    // HARUE
+    // ============================================================================================
+
+    // B (tap): fast blue sonic boom slash projectile (low dmg, strong knockback)
+    constexpr Move har_sonic_boom = Move("Sonic Slash", 22, ANIM_HAR_BSHOT)
+        .fires(4, Shot().of(PROJ_SONIC_SLASH).dmg(3).fly(fp(7.2), 40)
+                        .size(16, 22).spawn(16, 14).launch(fp(5.2), fp(-2.4)).stun(20));
+
+    // B (hold): charges Power-Up gauge; at 100% boosts speed +35% and damage +30% for 20s
+    constexpr Move har_power_charge = Move("Focus Charge", 1000, ANIM_HAR_CHARGE)
+        .charge_power()
+        .swaps_when_holding(&har_sonic_boom);
+
+    // Side + B: Dash & Slash; when powered up plants a 2-second delayed explosion on hit
+    constexpr Move har_dash_slash = Move("Flash Slash", 34, ANIM_HAR_DASH)
+        .once_per_jump()
+        .dash(Drive().frames(5, 16).speed(fp(6.0), 0).stops_on_hit())
+        .hit(Hitbox().frames(6, 17).at(16, 14).size(26, 22).dmg(8).launch(fp(3.2), fp(-2.0)).stun(18).delayed_boom(16));
+
+    // Up + B: Upper slash into the air, then heavy downward slam slash (huge damage, huge end lag)
+    constexpr Move har_up_down_slash = Move("Sky Splitter", 66, ANIM_HAR_UPDOWN)
+        .once_per_jump()
+        .dash(Drive().frames(4, 16).speed(fp(1.0), -fp(5.2)))
+        .dash2(Drive().frames(24, 36).speed(fp(1.2), fp(6.2)))
+        .hit(Hitbox().frames(5, 16).at(10, 22).size(24, 28).dmg(7).launch(fp(0.5), -fp(5.4)).stun(20))
+        .hit(Hitbox().frames(25, 36).at(14, 10).size(28, 28).dmg(18).launch(fp(3.8), fp(4.4)).stun(28))
+        .ends_on_landing(40);
+
+    // Down + B (when powered up): consumes Power-Up and summons a 10% HP / 50% dmg Harue or Waffles clone
+    constexpr Move har_summon_clone = Move("Shadow Twin", 22, ANIM_HAR_CHARGE)
+        .summon_har_clone();
+
+    // Down + B (normal): projectile-only Reflect using shield stance
+    constexpr Move har_reflect = Move("Blade Reflect", 30, ANIM_HAR_REFLECT)
+        .reflects(3, 25)
+        .swaps_when_holding(&har_summon_clone);
+
+    // A: 3 slashes back and forth
+    constexpr Move har_jab = Move("Triple Slash", 36, ANIM_HAR_JAB)
+        .hit(Hitbox().frames(4, 8).at(18, 14).size(22, 18).dmg(3).launch(fp(0.4), 0).stun(14))
+        .hit(Hitbox().frames(13, 17).at(18, 14).size(22, 18).dmg(3).launch(fp(0.4), 0).stun(14))
+        .hit(Hitbox().frames(22, 28).at(22, 14).size(26, 20).dmg(5).launch(fp(3.2), fp(-1.8)).stun(18));
+
+    // Side + A: Huge slash with massive range
+    constexpr Move har_huge_slash = Move("Great Cleave", 44, ANIM_HAR_FSMASH)
+        .hit(Hitbox().frames(12, 19).at(28, 14).size(44, 28).dmg(14).launch(fp(5.2), fp(-3.2)).stun(26));
+
+    // Up + A: One slash sending opponent upwards
+    constexpr Move har_up_slash = Move("Rising Crescent", 34, ANIM_HAR_USMASH)
+        .hit(Hitbox().frames(6, 13).at(12, 26).size(30, 32).dmg(11).launch(fp(0.6), fp(-5.6)).stun(26));
+
+    // Down + A: Spinning slash (hits both sides)
+    constexpr Move har_spin_slash = Move("Whirlwind Slash", 38, ANIM_HAR_SPIN)
+        .hit(Hitbox().frames(5, 11).at(18, 14).size(26, 20).dmg(5).launch(fp(2.4), fp(-2.0)).stun(16).left_right())
+        .hit(Hitbox().frames(13, 19).at(-18, 14).size(26, 20).dmg(6).launch(fp(3.0), fp(-2.2)).stun(18).left_right());
+
+    // Air + A: Spin attack with a sword
+    constexpr Move har_air_spin = Move("Sword Cyclone", 30, ANIM_HAR_SPIN)
+        .hit(Hitbox().frames(4, 18).at(0, 14).size(38, 28).dmg(8).launch(fp(3.2), fp(-2.2)).stun(18));
+
+    // Final Smash: huge lunge slash -> in-stage clone combo + double down-slash explosion
+    constexpr Move har_fs_start = Move("Twin Tempest", 34, ANIM_HAR_FS)
+        .dash(Drive().frames(4, 15).speed(fp(4.8), 0).stops_on_hit())
+        .hit(Hitbox().frames(5, 16).at(22, 14).size(36, 28).dmg(6).launch(0, fp(-2.0)).stun(24))
+        .in_stage_final_smash(FS_HARUE_COMBO)
+        .powered_final_smash(FS_HARUE_SLICE);
+
+    constexpr MoveSet har_moveset = MoveSet()
+        .set(SLOT_SPECIAL,      &har_power_charge)
+        .set(SLOT_SPECIAL_SIDE, &har_dash_slash)
+        .set(SLOT_SPECIAL_UP,   &har_up_down_slash)
+        .set(SLOT_SPECIAL_DOWN, &har_reflect)
+        .set(SLOT_JAB,          &har_jab)
+        .set(SLOT_FSMASH,       &har_huge_slash)
+        .set(SLOT_USMASH,       &har_up_slash)
+        .set(SLOT_DSMASH,       &har_spin_slash)
+        .set(SLOT_NAIR,         &har_air_spin)
+        .set(SLOT_FAIR,         &har_air_spin)
+        .set(SLOT_BAIR,         &har_air_spin)
+        .set(SLOT_UAIR,         &har_air_spin)
+        .set(SLOT_DAIR,         &har_air_spin);
+
 }
 
 #endif

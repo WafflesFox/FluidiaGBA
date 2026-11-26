@@ -1,4 +1,4 @@
-#define GAME_VER "0.4.5a"
+#define GAME_VER "0.4.9a"
 #include "bn_core.h"
 #include "bn_color.h"
 #include "bn_bg_palettes.h"
@@ -28,6 +28,8 @@
 #include "bn_sprite_items_waffle.h"
 #include "bn_sprite_items_snep.h"
 #include "bn_sprite_items_umbreon.h"
+#include "bn_sprite_items_harue.h"
+#include "bn_sprite_items_harueslice_sword.h"
 
 #include "bn_sprite_items_black_block.h"   // solid black 64x64, used by the screen transition
 #include "phone.h"
@@ -53,7 +55,7 @@
 #include "bn_sprite_items_battle_platform_sand.h"
 #include "bn_affine_bg_items_battle_top_grass.h"
 #include "bn_affine_bg_items_battle_top_wood.h"
-#include "bn_regular_bg_items_battle_backdrop_16.h"    // with your other includes
+#include "bn_regular_bg_items_battle_backdrop_16.h"
 
 
 
@@ -113,7 +115,7 @@ namespace
 
         void start_chunk(int carry_us)
         {
-            handle = track->chunks[chunk].play(track->volume);
+            handle = bn::sound::play_with_priority(100, track->chunks[chunk], track->volume);
             elapsed_us = carry_us;      // keep the leftover so rounding never accumulates into drift
         }
 
@@ -191,6 +193,15 @@ namespace
                 break;
             case 15:
                 bn::sound_items::yoink.play();
+                break;
+            case 16:
+                bn::sound_items::grab.play();
+                break;
+            case 17:
+                bn::sound_items::mining.play();
+                break;
+            case 18:
+                bn::sound_items::final_smash.play();
                 break;
             default:
                 bn::sound_items::meow.play();
@@ -594,6 +605,14 @@ namespace
         UMB_RECOMMEND, UMB_RECOMMEND_2, UMB_YES, UMB_NO,
         UMB_STOP_Q, UMB_STOP_Y, UMB_STOP_N,
         UMB_RECOMMEND3,
+        UMB_FIGHT,
+    };
+    enum HarNode
+    {
+        HAR_START, HAR_EXCITE, HAR_GOOD,
+        HAR_FOLLOW, HAR_YES, HAR_NO,
+        HAR_FOLLOW_Q, HAR_STOP_Y, HAR_STOP_N,
+        HAR_FIGHT,
     };
 
     constexpr Choice snep_okay_choices[]   = { { "Yes", SNEP_OKAY_YES }, { "Not really", SNEP_OKAY_NO } };
@@ -606,8 +625,11 @@ namespace
     constexpr Choice fox_hub_choices[] = {{"Follow", FOX_MENU}, {"Fight", FOX_FIGHT_Q}, {"Nothing", DLG_END}};
     constexpr Choice fox_fight_choices[] = {{"Lets try", FOX_FIGHT_YES}, {"Nope", FOX_FIGHT_NO}};
 
-    constexpr Choice umb_follow_choices[] = {{"Yes", UMB_YES}, {"No", UMB_NO}};
-    constexpr Choice umb_stop_choices[] = {{"Right here", UMB_STOP_Y}, {"Not yet", UMB_STOP_N}};
+    constexpr Choice umb_follow_choices[] = {{"Yes", UMB_YES}, {"No", UMB_NO}, {"Fight", UMB_FIGHT}};
+    constexpr Choice umb_stop_choices[] = {{"Right here", UMB_STOP_Y}, {"Not yet", UMB_STOP_N}, {"Fight", UMB_FIGHT}};
+
+    constexpr Choice har_follow_choices[] = {{"Yes, Dad", HAR_YES}, {"Fight!", HAR_FIGHT}, {"Nah", HAR_NO}};
+    constexpr Choice har_stop_choices[] = {{"Yeah..", HAR_STOP_Y}, {"Fight!", HAR_FIGHT}, {"Not yet.", HAR_STOP_N}};
 
     constexpr DialogueNode snep_nodes[] =
     {
@@ -664,6 +686,21 @@ namespace
         say("Alright, Thanks!", DLG_END, ACT_STOP_FOLLOW, UMB_RECOMMEND3),
         say("Oooo Alr"),
         say("Yeah this is better.. but", UMB_RECOMMEND),
+        say("Alright, let's battle owo!", DLG_END, ACT_BATTLE),
+    };
+
+    constexpr DialogueNode harue_nodes[]=
+    {
+        say("Heyya Son, Good day!", HAR_EXCITE),
+        say("I cant wait to fight soon.", HAR_GOOD),
+        say("Just polishing my ol weapon yknow?", DLG_END, ACT_NONE, HAR_FOLLOW),
+        ask("Huh, want to show me something?", har_follow_choices),
+        say("Oh, lead the way son!", DLG_END, ACT_FOLLOW, HAR_FOLLOW_Q),
+        say("Goodluck out there"),
+        ask("Is that all, Son?", har_stop_choices),
+        say("That was fun.", DLG_END, ACT_STOP_FOLLOW, HAR_FOLLOW),
+        say("Okie dokie then. Lead the way!"),
+        say("Alright son, show me what you got!", DLG_END, ACT_BATTLE),
     };
 
     // ---- FIGHTING DATA ----
@@ -686,7 +723,7 @@ namespace
         "Waffles",
         &bn::sprite_items::waffle,                                       // the overworld sprite sheet is reused
         {
-            240,                                                         // max HP
+            300,                                                         // max HP
             battle::fp(2.0), battle::fp(0.6), battle::fp(0.2), battle::fp(0.35),   // walk speed, ground accel, air accel, friction
             88, 88, 2,                                                   // jump power, double jump power, jumps (2 = a double jump)
             5, 112, 144,                                                 // gravity, fall speed, fast-fall speed
@@ -703,16 +740,63 @@ namespace
         "Filip",
         &bn::sprite_items::snep,
         {
-            450,
-            battle::fp(1.3), battle::fp(0.5),battle::fp(0.5),battle::fp(0.2),
+            500,
+            battle::fp(1.5), battle::fp(0.5),battle::fp(0.5),battle::fp(0.2),
             90,88,2,
             7,140,190,
             14,28,
             10,
             70,
             &battle::snep_moveset,
+            100, 100, 100,
+            &battle::filip_fs_start,
         }
     };
+    constexpr battle::FighterDef umb_fighter =
+    {
+        "Umbreon",
+        &bn::sprite_items::umbreon,
+        {
+            360,
+            battle::fp(1.3), battle::fp(0.7),battle::fp(0.5),battle::fp(0.4),
+            70,70,2,
+            7,100,120,
+            14,26,
+            0,
+            80,
+            &battle::umb_moveset,
+            100, 100, 100,
+            &battle::umb_fs_start,
+            true,
+        }
+    };
+    constexpr battle::FighterDef har_fighter =
+    {
+        "Harue",
+        &bn::sprite_items::harue,
+        {
+            900,
+            battle::fp(2.1), battle::fp(0.65), battle::fp(0.28), battle::fp(0.35),
+            100, 0, 1,
+            7, 125, 165,
+            15, 28,
+            5,
+            75,
+            &battle::har_moveset,
+            100, 100, 100,
+            &battle::har_fs_start,
+        }
+    };
+
+    // Add any new playable fighters here — the Character Select screen adapts automatically!
+    constexpr const battle::FighterDef* playable_fighters[] =
+    {
+        &waffle_fighter,
+        &snep_fighter,
+        &umb_fighter,
+        &har_fighter,
+    };
+    constexpr int playable_count = sizeof(playable_fighters) / sizeof(playable_fighters[0]);
 
     // TO ADD AN NPC:
     //  1. #include its sprite header at the top ("bn_sprite_items_<name>.h")
@@ -721,10 +805,11 @@ namespace
     //  3. add one line to this table
     constexpr NpcDef npc_defs[] =
     {
-        //  name       sprite                    map        x                        y                     wander    traits          nodes       start
+        //  name       sprite                    map        x                        y                      wander    traits          nodes       start
         { "Filip:",  &bn::sprite_items::snep,  MAP_WORLD, world::pixel_w / 2 + 88, world::pixel_h / 2 + 8,  48 * T,   TRAIT_EXTROVERT, snep_nodes, SNEP_BABE, &snep_fighter},
         { "Waffles:", &bn::sprite_items::waffle, MAP_WORLD, world::pixel_w/2 + 50, world::pixel_h/2 + 10, 90 * T, TRAIT_PLAYFUL | TRAIT_INTROVERT, fox_nodes, FOX_CLONE, &waffle_fighter},
-        { "Umbreon:", &bn::sprite_items::umbreon, MAP_WORLD2, world::pixel_w/2 + 50, world::pixel_h/2 + 30, 30 * T, TRAIT_WALKER | TRAIT_PLAYFUL, umb_nodes, UMB_START},
+        { "Umbreon:", &bn::sprite_items::umbreon, MAP_WORLD2, world::pixel_w/2 + 50, world::pixel_h/2 + 30, 30 * T, TRAIT_LAZY | TRAIT_WALKER, umb_nodes, UMB_START, &umb_fighter},
+        { "Harue: ", &bn::sprite_items::harue, MAP_HOUSE, 5*T, 7*T, 10*T, TRAIT_EXTROVERT, harue_nodes, HAR_START, &har_fighter },
     };
     constexpr int npc_count = sizeof(npc_defs) / sizeof(npc_defs[0]);
 
@@ -1313,6 +1398,305 @@ namespace
         // everything gets destroyed in this bounds
     }
 
+    bool char_select_screen(bn::sprite_text_generator& text, MusicPlayer& music, net::LinkSession& net_session,
+                            int current_map, bn::vector<bn::sprite_ptr, 12>& blocks, int trans_dir,
+                            int& out_p1_pick, int& out_p2_pick)
+    {
+        bn::regular_bg_ptr mountains = bn::regular_bg_items::layer_2_mountains.create_bg(0, 0);
+        bn::regular_bg_ptr hills     = bn::regular_bg_items::layer_3_hills.create_bg(0, 0);
+        bn::regular_bg_ptr forest    = bn::regular_bg_items::layer_4_forest.create_bg(0, 0);
+        mountains.set_priority(3);
+        hills.set_priority(2);
+        forest.set_priority(1);
+
+        bn::vector<bn::sprite_ptr, 4> panel_bg;
+        for(int i = 0; i < 4; ++i)
+        {
+            bn::sprite_ptr b = bn::sprite_items::black_block.create_sprite(bn::fixed(-96 + i * 64), 64);
+            b.set_bg_priority(0);
+            b.set_z_order(5);
+            panel_bg.push_back(b);
+        }
+
+        const int cols = playable_count <= 4 ? playable_count : 4;
+        const int total_rows = (playable_count + cols - 1) / cols;
+        const int visible_rows = total_rows <= 2 ? total_rows : 2;
+        const int grid_y0 = visible_rows == 1 ? -34 : -44;
+        const int cell_w = 48;
+        const int cell_h = 30;
+
+        int local_pick = 0;
+        int remote_pick = 0;
+        bool local_ready = false;
+        bool remote_ready = false;
+        bool peer_in_cs = false;
+        int scroll_row = 0;
+
+        bn::vector<bn::sprite_ptr, 8> card_sprites;
+        bn::optional<bn::sprite_ptr> p1_prev;
+        bn::optional<bn::sprite_ptr> p2_prev;
+        bn::sprite_palette_ptr p1_pal = bn::sprite_palette_ptr::create_new(playable_fighters[0]->sprite->palette_item());
+        bn::sprite_palette_ptr p2_pal = bn::sprite_palette_ptr::create_new(playable_fighters[0]->sprite->palette_item());
+
+        bn::vector<bn::sprite_ptr, 12> header_text;
+        bn::vector<bn::sprite_ptr, 12> cursor_text;
+        bn::vector<bn::sprite_ptr, 32> status_text;
+
+        text.set_bg_priority(0);
+        text.set_center_alignment();
+        text.generate(0, -68, "SELECT FIGHTER", header_text);
+        for(bn::sprite_ptr& sp : header_text) { sp.set_z_order(-10); }
+
+        auto rebuild_cards = [&]()
+        {
+            card_sprites.clear();
+            for(int r = 0; r < visible_rows; ++r)
+            {
+                const int row = scroll_row + r;
+                if(row >= total_rows) { break; }
+                int row_cols = playable_count - row * cols;
+                if(row_cols > cols) { row_cols = cols; }
+                const int cy = grid_y0 + r * cell_h;
+                for(int c = 0; c < row_cols; ++c)
+                {
+                    const int idx = row * cols + c;
+                    const int cx = (2 * c - (row_cols - 1)) * cell_w / 2;
+                    bn::sprite_ptr sp = playable_fighters[idx]->sprite->create_sprite(cx, cy, first_frame(DOWN, false));
+                    sp.set_bg_priority(0);
+                    sp.set_z_order(-1);
+                    card_sprites.push_back(sp);
+                }
+            }
+        };
+
+        auto card_pos = [&](int idx, int& out_x, int& out_y) -> bool
+        {
+            const int row = idx / cols;
+            const int col = idx % cols;
+            if(row < scroll_row || row >= scroll_row + visible_rows) { return false; }
+            int row_cols = playable_count - row * cols;
+            if(row_cols > cols) { row_cols = cols; }
+            out_x = (2 * col - (row_cols - 1)) * cell_w / 2;
+            out_y = grid_y0 + (row - scroll_row) * cell_h;
+            return true;
+        };
+
+        int shown_p1 = -1;
+        int shown_p2 = -1;
+        bool shown_p1_rdy = false;
+        bool shown_p2_rdy = false;
+        bool shown_peer = false;
+
+        auto refresh_ui = [&]()
+        {
+            const int p1_idx = (net_session.my_id == 0) ? local_pick : remote_pick;
+            const int p2_idx = (net_session.my_id == 1) ? local_pick : remote_pick;
+            const bool p1_rdy = (net_session.my_id == 0) ? local_ready : remote_ready;
+            const bool p2_rdy = (net_session.my_id == 1) ? local_ready : remote_ready;
+
+            cursor_text.clear();
+            text.set_center_alignment();
+            int cx = 0, cy = 0;
+            if(card_pos(p1_idx, cx, cy)) { text.generate(cx - 8, cy - 16, "P1", cursor_text); }
+            if(card_pos(p2_idx, cx, cy)) { text.generate(cx + 8, cy + 16, "P2", cursor_text); }
+            for(bn::sprite_ptr& sp : cursor_text) { sp.set_z_order(-12); }
+
+            if(p1_idx != shown_p1 || !p1_prev)
+            {
+                shown_p1 = p1_idx;
+                p1_pal = bn::sprite_palette_ptr::create_new(playable_fighters[p1_idx]->sprite->palette_item());
+                p1_prev = playable_fighters[p1_idx]->sprite->create_sprite(-76, 22, first_frame(RIGHT, false));
+                p1_prev->set_bg_priority(0);
+                p1_prev->set_z_order(-2);
+                p1_prev->set_palette(p1_pal);
+            }
+            if(p2_idx != shown_p2 || !p2_prev)
+            {
+                shown_p2 = p2_idx;
+                p2_pal = bn::sprite_palette_ptr::create_new(playable_fighters[p2_idx]->sprite->palette_item());
+                p2_prev = playable_fighters[p2_idx]->sprite->create_sprite(76, 22, first_frame(LEFT, false));
+                p2_prev->set_bg_priority(0);
+                p2_prev->set_z_order(-2);
+                p2_prev->set_palette(p2_pal);
+            }
+
+            p1_pal.set_fade(p1_rdy ? bn::color(31, 28, 10) : bn::color(0, 0, 0), p1_rdy ? bn::fixed(0.35) : bn::fixed(0));
+            p2_pal.set_fade(p2_rdy ? bn::color(10, 26, 31) : bn::color(0, 0, 0), p2_rdy ? bn::fixed(0.35) : bn::fixed(0));
+
+            status_text.clear();
+            text.set_center_alignment();
+            text.generate(-76, 46, playable_fighters[p1_idx]->name, status_text);
+            text.generate(-76, 60, p1_rdy ? "READY!" : "PICKING", status_text);
+            text.generate(76, 46, playable_fighters[p2_idx]->name, status_text);
+            text.generate(76, 60, p2_rdy ? "READY!" : "PICKING", status_text);
+            text.generate(0, 22, "VS", status_text);
+
+            const char* mid_msg = !peer_in_cs ? "SYNCING..." :
+                                  ((p1_rdy && p2_rdy) ? "STARTING!" :
+                                  (local_ready ? "WAIT (B:BACK)" : "A:READY"));
+            text.generate(0, 70, mid_msg, status_text);
+            for(bn::sprite_ptr& sp : status_text) { sp.set_z_order(-10); }
+
+            shown_p1_rdy = p1_rdy;
+            shown_p2_rdy = p2_rdy;
+            shown_peer = peer_in_cs;
+        };
+
+        rebuild_cards();
+        refresh_ui();
+
+        bn::fixed cam = 0;
+        bn::fixed cam_step = 0.25;
+        int anim_tick = 0;
+        int frame_count = 0;
+        int both_ready_ticks = 0;
+
+        // wipe_state: 0 = opening wipe away, 1 = selecting, 2 = closing wipe into battle
+        int wipe_state = 0;
+        bn::fixed wipe_pos = 0;
+        bool result_ok = true;
+
+        while(true)
+        {
+            if(!net_session.connected)
+            {
+                result_ok = false;
+                if(wipe_state != 2)
+                {
+                    make_blocks(blocks);
+                    wipe_pos = transition_distance(trans_dir);
+                    move_blocks(blocks, trans_dir, wipe_pos);
+                    wipe_state = 2;
+                }
+            }
+
+            if(wipe_state == 0)
+            {
+                wipe_pos -= TRANSITION_SPEED;
+                if(wipe_pos <= -transition_distance(trans_dir))
+                {
+                    blocks.clear();
+                    wipe_state = 1;
+                }
+                else { move_blocks(blocks, trans_dir, wipe_pos); }
+            }
+            else if(wipe_state == 2)
+            {
+                wipe_pos -= TRANSITION_SPEED;
+                if(wipe_pos <= 0)
+                {
+                    move_blocks(blocks, trans_dir, 0);
+                    break;
+                }
+                move_blocks(blocks, trans_dir, wipe_pos);
+            }
+
+            if(wipe_state == 1 && peer_in_cs)
+            {
+                if(!local_ready)
+                {
+                    int next_pick = local_pick;
+                    if(bn::keypad::left_pressed()  && local_pick > 0)                  { --next_pick; }
+                    if(bn::keypad::right_pressed() && local_pick + 1 < playable_count) { ++next_pick; }
+                    if(bn::keypad::up_pressed()    && local_pick - cols >= 0)          { next_pick -= cols; }
+                    if(bn::keypad::down_pressed()  && local_pick + cols < playable_count) { next_pick += cols; }
+
+                    if(next_pick != local_pick)
+                    {
+                        sfx(2);
+                        local_pick = next_pick;
+                        const int row = local_pick / cols;
+                        bool scrolled = false;
+                        if(row < scroll_row) { scroll_row = row; scrolled = true; }
+                        else if(row >= scroll_row + visible_rows) { scroll_row = row - visible_rows + 1; scrolled = true; }
+                        if(scrolled) { rebuild_cards(); }
+                    }
+
+                    if(bn::keypad::a_pressed())
+                    {
+                        sfx(12);
+                        local_ready = true;
+                    }
+                }
+                else if(bn::keypad::b_pressed() && !remote_ready)
+                {
+                    sfx(2);
+                    local_ready = false;
+                }
+            }
+
+            // Exchange selection & ready flags deterministically over the link session
+            net_session.local_invite = net::INV_BUSY;
+            net_session.update_overworld(16 + local_pick * 16, local_ready ? 777 : 333, current_map,
+                                         local_ready ? 1 : 0, local_ready, false);
+
+            ++frame_count;
+            if(!peer_in_cs && frame_count >= 18 && net_session.has_remote_pos && !net_session.remote_moving)
+            {
+                const bool valid_unready = !net_session.remote_running && net_session.remote_y >= 310 && net_session.remote_y <= 355;
+                const bool valid_ready   =  net_session.remote_running && net_session.remote_y >= 755 && net_session.remote_y <= 795;
+                if(valid_unready || valid_ready) { peer_in_cs = true; }
+            }
+
+            if(peer_in_cs && net_session.has_remote_pos)
+            {
+                int rp = (net_session.remote_x - 8) / 16;
+                if(rp < 0) { rp = 0; }
+                if(rp >= playable_count) { rp = playable_count - 1; }
+                remote_pick = rp;
+                remote_ready = net_session.remote_running && net_session.remote_y >= 750;
+            }
+
+            const int p1_idx = (net_session.my_id == 0) ? local_pick : remote_pick;
+            const int p2_idx = (net_session.my_id == 1) ? local_pick : remote_pick;
+            const bool p1_rdy = (net_session.my_id == 0) ? local_ready : remote_ready;
+            const bool p2_rdy = (net_session.my_id == 1) ? local_ready : remote_ready;
+
+            if(p1_idx != shown_p1 || p2_idx != shown_p2 || p1_rdy != shown_p1_rdy ||
+               p2_rdy != shown_p2_rdy || peer_in_cs != shown_peer)
+            {
+                refresh_ui();
+            }
+
+            if(wipe_state == 1 && peer_in_cs && local_ready && remote_ready)
+            {
+                if(both_ready_ticks == 0) { sfx(9); }
+                if(++both_ready_ticks >= 25)
+                {
+                    make_blocks(blocks);
+                    wipe_pos = transition_distance(trans_dir);
+                    move_blocks(blocks, trans_dir, wipe_pos);
+                    wipe_state = 2;
+                }
+            }
+            else
+            {
+                both_ready_ticks = 0;
+            }
+
+            // Animate previews & parallax BG
+            ++anim_tick;
+            const int step_p1 = walk_cycle[(anim_tick / (p1_rdy ? 5 : 10)) % 4];
+            const int step_p2 = walk_cycle[(anim_tick / (p2_rdy ? 5 : 10)) % 4];
+            if(p1_prev) { p1_prev->set_tiles(playable_fighters[p1_idx]->sprite->tiles_item(), first_frame(RIGHT, p1_rdy) + step_p1); }
+            if(p2_prev) { p2_prev->set_tiles(playable_fighters[p2_idx]->sprite->tiles_item(), first_frame(LEFT, p2_rdy) + step_p2); }
+
+            cam += cam_step;
+            if(cam > 40 || cam < -40) { cam_step = -cam_step; }
+            mountains.set_x(-cam * bn::fixed(0.25));
+            hills.set_x(-cam * bn::fixed(0.5));
+            forest.set_x(-cam);
+
+            music.update();
+            bn::core::update();
+        }
+
+        out_p1_pick = (net_session.my_id == 0) ? local_pick : remote_pick;
+        out_p2_pick = (net_session.my_id == 1) ? local_pick : remote_pick;
+        text.set_center_alignment();
+        return result_ok;
+    }
+
     void game_screen(bn::sprite_text_generator& text)
     {
         int current_map = MAP_HOUSE;
@@ -1448,11 +1832,15 @@ namespace
                 if(ev & battle::EV_SWING) {sfx(7);}
                 if(ev & battle::EV_ABSORB) {sfx(15);}
                 if(ev & battle::EV_BOOM) {sfx(13);}
-                if(ev & battle::EV_FINAL_SMASH){sfx(11); sfx(14);}
+                if(ev & battle::EV_FINAL_SMASH){sfx(18);}
                 if(ev & battle::EV_SMASH){sfx(5);}
+                if(ev & battle::EV_GRAB){sfx(16);}
+                if(ev & battle::EV_MINING){sfx(17);}
 
                 if(!battle_ui.active())                                 // it just ended: the black blocks cover the screen again
                 {
+                    music.update();
+                    bn::core::update();                                 // flush battle BGs from VRAM
                     ground_bg = make_ground(current_map);               // bring the overworld back
                     top_bg = make_top(current_map);
                     ground_bg->set_priority(2);
@@ -1740,61 +2128,89 @@ namespace
                     {
                         trans_pos = 0;
                         net_battle_pending = false;
-                        net_session.reset_battle_sync();
-                        net_session.local_invite = net::INV_BUSY;
 
+                        ground_bg.reset();
+                        top_bg.reset();
+                        waffle.set_visible(false);
+                        remote_waffle.set_visible(false);
+                        park_npcs(npcs);
+                        text_sprites.clear();
+                        debug_text_sprites.clear();
+                        conn_text_sprites.clear();
+                        conn_banner_timer = 0;
+                        music.update();
+                        bn::core::update(); // free VRAM before creating Character Select BGs
+
+                        int p1_pick = 0;
+                        int p2_pick = 0;
+                        const bool cs_ok = char_select_screen(text, music, net_session, current_map, blocks, trans_dir, p1_pick, p2_pick);
+                        music.update();
+                        bn::core::update(); // free Character Select BGs from VRAM
+
+                        bool synced = false;
                         int btl_map = current_map;
                         unsigned btl_seed = unsigned(random_int(500) + 1);
-                        bool synced = false;
 
-                        if(net_session.my_id == 0)
+                        if(cs_ok)
                         {
-                            const int pkt = (net::PKT_BTL_SEED << 12) | ((btl_seed & 0x1FF) << 3) | (btl_map & 7);
-                            for(int w = 0; w < 90; ++w)
+                            net_session.reset_battle_sync();
+                            net_session.local_invite = net::INV_BUSY;
+
+                            if(net_session.my_id == 0)
                             {
-                                bn::link::send(pkt);
-                                net_session.poll();
-                                if(net_session.peer_ready) { synced = true; break; }
-                                music.update();
-                                bn::core::update();
-                            }
-                        }
-                        else
-                        {
-                            for(int w = 0; w < 90; ++w)
-                            {
-                                net_session.poll();
-                                if(net_session.got_seed)
+                                const int pkt = (net::PKT_BTL_SEED << 12) | ((btl_seed & 0x1FF) << 3) | (btl_map & 7);
+                                for(int w = 0; w < 90; ++w)
                                 {
-                                    btl_map = net_session.synced_map;
-                                    btl_seed = net_session.synced_seed;
-                                    bn::link::send((net::PKT_BTL_READY << 12) | 1);
-                                    synced = true;
-                                    break;
+                                    bn::link::send(pkt);
+                                    net_session.poll();
+                                    if(net_session.peer_ready) { synced = true; break; }
+                                    music.update();
+                                    bn::core::update();
                                 }
-                                music.update();
-                                bn::core::update();
+                            }
+                            else
+                            {
+                                for(int w = 0; w < 90; ++w)
+                                {
+                                    net_session.poll();
+                                    if(net_session.got_seed)
+                                    {
+                                        btl_map = net_session.synced_map;
+                                        btl_seed = net_session.synced_seed;
+                                        bn::link::send((net::PKT_BTL_READY << 12) | 1);
+                                        synced = true;
+                                        break;
+                                    }
+                                    music.update();
+                                    bn::core::update();
+                                }
                             }
                         }
 
                         if(synced)
                         {
-                            ground_bg.reset();
-                            top_bg.reset();
-                            waffle.set_visible(false);
-                            remote_waffle.set_visible(false);
-                            park_npcs(npcs);
-                            text_sprites.clear();
-                            debug_text_sprites.clear();
-                            conn_text_sprites.clear();
-                            conn_banner_timer = 0;
                             music.play(battle_music(btl_map));
-                            battle_ui.start(waffle_fighter, waffle_fighter, map_stage(btl_map), blocks, text, btl_seed,
-                                            nullptr, battle::Buff(), nullptr, false, &net_session, net_session.my_id);
+                            battle_ui.start(*playable_fighters[p1_pick], *playable_fighters[p2_pick], map_stage(btl_map),
+                                            blocks, text, btl_seed, nullptr, battle::Buff(), nullptr, false,
+                                            &net_session, net_session.my_id, &waffle_fighter);
                             trans_phase = 0;
                         }
                         else
                         {
+                            ground_bg = make_ground(current_map);
+                            top_bg = make_top(current_map);
+                            ground_bg->set_priority(2);
+                            if(top_bg) { top_bg->set_priority(0); }
+                            waffle.set_visible(true);
+                            spawn_npcs(npcs, current_map, x.integer(), y.integer());
+                            text.set_center_alignment();
+                            text.generate(-65, 70, map_name(current_map), text_sprites);
+                            if(debug_mode)
+                            {
+                                text.set_right_alignment();
+                                text.generate(112, -70, "DEBUG", debug_text_sprites);
+                                text.set_center_alignment();
+                            }
                             net_session.local_invite = net::INV_NONE;
                             trans_phase = 2;
                         }
@@ -1825,7 +2241,7 @@ namespace
                         remote_waffle.set_visible(false);
                         conn_text_sprites.clear();
                         conn_banner_timer = 0;
-                        battle_ui.start(waffle_fighter, *foe.fight, map_stage(current_map), blocks, text, unsigned(random_int(60000) + 1), partner, buff, bystander, debug_mode);
+                        battle_ui.start(waffle_fighter, *foe.fight, map_stage(current_map), blocks, text, unsigned(random_int(60000) + 1), partner, buff, bystander, debug_mode, nullptr, -1, &waffle_fighter);
                         battle_npc = -1;
                         trans_phase = 0;                              // the battle owns the black blocks now
                     }
@@ -1839,6 +2255,8 @@ namespace
 
                         ground_bg.reset();                            // free the old map first
                         top_bg.reset();
+                        music.update();
+                        bn::core::update();
                         ground_bg = make_ground(current_map);
                         top_bg = make_top(current_map);
                         ground_bg->set_priority(2);

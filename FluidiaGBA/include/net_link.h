@@ -6,6 +6,7 @@
 #include "bn_link_player.h"
 #include "bn_optional.h"
 #include "battle_logic.h"
+#include "net_lockstep.h"
 
 namespace net
 {
@@ -17,11 +18,13 @@ namespace net
         PKT_OW_Y          = 2,  // payload: world y in pixels (0..4095)
         PKT_OW_META       = 3,  // (out of battle) bits 0..2: map, 3..4: dir, 5: run, 6: move, 7..9: invite
         PKT_BTL_SEED      = 4,  // (out of battle) bits 0..2: stage_map, bits 3..11: seed
+        PKT_BTL_CLONE_POS = 1,  // (in battle) bit 11: clone(0..1), bit 10: axis(0=x,1=y+256), bits 0..9: val
+        PKT_BTL_CLONE_META= 2,  // (in battle) bit 11: clone, bit 10: active, 8..9: src, 7: dir, 0..6: hp
         PKT_BTL_SYNC_POS  = 3,  // (in battle) bits 10..11: sub (0:P0x, 1:P0y+256, 2:P1x, 3:P1y+256)
         PKT_BTL_SYNC_STAT = 4,  // (in battle) bits 10..11: sub (0:P0hp, 1:P1hp, 2:P0smash, 3:P1smash)
         PKT_BTL_INPUT     = 5,  // bits 0..1: move, 2:up, 3:dn, 4:shld, 5..8: edge toggles (jmp,atk,spc,fs)
         PKT_BTL_READY     = 6,  // payload: 1 when ready
-        PKT_BTL_EVENT     = 7,  // bits 8..11: kind (1=FinalSmash, 2=Winner)
+        PKT_BTL_HASH      = 7,  // (in battle) bits 10..11: checkpoint (sim frame / 64 & 3), bits 0..9: state hash
     };
 
     enum InviteState
@@ -41,6 +44,8 @@ namespace net
         int my_id = 0;
         int disconnect_timer = 0;
         int send_tick = 0;
+
+        Lockstep ls;            // deterministic lockstep input exchange for battles (net_lockstep.h)
 
         // Remote overworld state
         int remote_x = 0;
@@ -98,6 +103,17 @@ namespace net
         bool got_win_event = false;
         int ev_winner = -1;
 
+        // Host -> Client Water Clone sync (slots 3 and 4 -> index 0 and 1)
+        bool has_clone_meta[2] = {};
+        bool clone_active[2]   = {};
+        int  clone_of[2]       = {};
+        int  clone_facing[2]   = { 1, 1 };
+        int  clone_hp[2]       = {};
+        bool has_clone_x[2]    = {};
+        bool has_clone_y[2]    = {};
+        int  clone_x[2]        = {};
+        int  clone_y[2]        = {};
+
         static int clamp12(int v)
         {
             if(v < 0) { return 0; }
@@ -132,6 +148,7 @@ namespace net
             if(loc_atk_tog)     { bits |= 1 << 6; }
             if(loc_spc_tog)     { bits |= 1 << 7; }
             if(loc_fs_tog)      { bits |= 1 << 8; }
+            if(cur.special_held){ bits |= 1 << 9; }
             return (PKT_BTL_INPUT << 12) | bits;
         }
 
@@ -147,6 +164,12 @@ namespace net
 
         void handle_packet(int pkt)
         {
+            if(pkt & 0x8000)            // lockstep input packet: only meaningful during a battle
+            {
+                if(in_battle) { ls.on_packet(pkt); }
+                return;
+            }
+
             const int type = (pkt >> 12) & 7;
             const int payload = pkt & 0x0FFF;
 
@@ -192,6 +215,7 @@ namespace net
                     rem_held.up     = (payload & (1 << 2)) != 0;
                     rem_held.down   = (payload & (1 << 3)) != 0;
                     rem_held.shield = (payload & (1 << 4)) != 0;
+                    rem_held.special_held = (payload & (1 << 9)) != 0;
 
                     const bool j = (payload & (1 << 5)) != 0;
                     const bool a = (payload & (1 << 6)) != 0;
@@ -206,6 +230,25 @@ namespace net
                 case PKT_BTL_READY:
                     peer_ready = true;
                     break;
+                case PKT_BTL_CLONE_POS:
+                {
+                    const int c = (payload >> 11) & 1;
+                    const int axis = (payload >> 10) & 1;
+                    const int val = payload & 0x3FF;
+                    if(axis == 0) { clone_x[c] = val;       has_clone_x[c] = true; }
+                    else          { clone_y[c] = val - 256; has_clone_y[c] = true; }
+                    break;
+                }
+                case PKT_BTL_CLONE_META:
+                {
+                    const int c = (payload >> 11) & 1;
+                    clone_active[c] = ((payload >> 10) & 1) != 0;
+                    clone_of[c]     = (payload >> 8) & 3;
+                    clone_facing[c] = ((payload >> 7) & 1) ? 1 : -1;
+                    clone_hp[c]     = payload & 0x7F;
+                    has_clone_meta[c] = true;
+                    break;
+                }
                 case PKT_BTL_SYNC_POS:
                 {
                     const int sub = (payload >> 10) & 3;
@@ -226,39 +269,22 @@ namespace net
                     else              { sync_smash[1] = val; has_sync_smash[1] = true; }
                     break;
                 }
-                case PKT_BTL_EVENT:
-                {
-                    const int kind = (payload >> 8) & 15;
-                    if(kind == 1)
-                    {
-                        const int seq = (payload >> 6) & 3;
-                        if(seq != last_rx_fs_seq)
-                        {
-                            last_rx_fs_seq = seq;
-                            ev_fs_atk = payload & 3;
-                            ev_fs_vic = (payload >> 2) & 3;
-                            ev_fs_id  = (payload >> 4) & 3;
-                            got_fs_event = true;
-                        }
-                    }
-                    else if(kind == 2)
-                    {
-                        ev_winner = payload & 3;
-                        got_win_event = true;
-                    }
+                case PKT_BTL_HASH:
+                    ls.on_hash(payload);
                     break;
-                }
                 default:
                     break;
             }
         }
 
-        void poll()
+        bool poll()             // true if a message was received
         {
             just_connected = false;
+            bool got = false;
             bn::optional<bn::link_state> state = bn::link::receive();
             if(state)
             {
+                got = true;
                 my_id = state->current_player_id();
                 if(state->player_count() >= 2)
                 {
@@ -292,6 +318,7 @@ namespace net
                     remote_invite = INV_NONE;
                 }
             }
+            return got;
         }
 
         void update_overworld(int x, int y, int map_id, int dir, bool running, bool moving)
@@ -332,6 +359,7 @@ namespace net
         {
             got_seed = false;
             peer_ready = false;
+            ls.start();
             loc_jmp_tog = loc_atk_tog = loc_spc_tog = loc_fs_tog = false;
             rem_jmp_tog = rem_atk_tog = rem_spc_tog = rem_fs_tog = false;
             pend_jmp = pend_atk = pend_spc = pend_fs = false;
@@ -339,6 +367,8 @@ namespace net
             for(int i = 0; i < 2; ++i)
             {
                 has_sync_x[i] = has_sync_y[i] = has_sync_hp[i] = has_sync_smash[i] = false;
+                has_clone_meta[i] = has_clone_x[i] = has_clone_y[i] = false;
+                clone_active[i] = false;
             }
             got_fs_event = false;
             last_rx_fs_seq = -1;
@@ -354,6 +384,7 @@ namespace net
             for(int i = 0; i < 2; ++i)
             {
                 has_sync_x[i] = has_sync_y[i] = has_sync_hp[i] = has_sync_smash[i] = false;
+                has_clone_x[i] = has_clone_y[i] = false;
             }
         }
     };

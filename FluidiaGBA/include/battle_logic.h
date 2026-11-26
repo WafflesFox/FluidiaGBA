@@ -23,6 +23,7 @@ namespace battle
     constexpr int SMASH_HIT_GAIN = 3;         // charge gained per point of damage dealt
     constexpr int SMASH_HURT_GAIN = 5;        // charge gained per point of damage taken
     constexpr int SMASH_PASSIVE_FRAMES = 30;    // +1 charge every N frames while fighting
+    constexpr int FS_FREEZE_FRAMES = 42;        // dramatic freeze frames when a Final Smash starts
     constexpr int SHIELD_MAX = 1000;            // a full shield
     constexpr int SHIELD_DRAIN = 4;             // lost every frame the shield is held (250 frames = about 4 seconds)
     constexpr int SHIELD_REGEN = 2;             // regained every frame it is not held (500 frames = about 8 seconds)
@@ -39,21 +40,52 @@ namespace battle
     constexpr int DRIVE_EXIT_PERCENT = 25;      // speed that is kept when a dash ends (the rest is thrown away so you don't keep sliding)
     constexpr int ABSORB_MARGIN = 6;            // fox thief catches shots this many pixels outside the body too
     constexpr int MAX_PROJECTILES = 8;
+    constexpr int MAX_FIGHTERS = 5;
+    constexpr int CLONE_CHARGE_MAX = 75;
+    constexpr int CLONE_HP_COST = 5;
+    constexpr int CLONE_LIFE_FRAMES = 60 * 20;
+    constexpr int MEAL_HEAL = 50;
+    constexpr int MEAL_DEF_BONUS = 35;
+    constexpr int MEAL_DEF_FRAMES = 600;
+    constexpr int HAR_CHARGE_MAX = 90;
+    constexpr int HAR_POWER_FRAMES = 60 * 20;
+    constexpr int HAR_BOMB_DELAY = 120;
     constexpr int MAX_PLATFORMS = 6;
     constexpr int MAX_HITBOXES = 4;             // per move (raise it if a move needs more)
-    constexpr int MAX_EFFECTS = 4;              // hit sparks on screen at once
+    constexpr int MAX_EFFECTS = 6;              // hit sparks & dust puffs on screen at once
     constexpr int PARTNER_SPACING = 24;         // a partner starts this many pixels behind the player
     constexpr int GRAB_DISTANCE = 16;           // a grabbed fighter is held this many pixels in front of the one who grabbed
     constexpr int GRAB_RELEASE_STUN = 14;       // a grabbed fighter that is let go without a hit (the grabber was interrupted)
     constexpr int POGO_RECOVERY = 10;           // frames of a move that are left after it bounced off somebody (pogo)
 
+    // ---- Umbreon / Minecraft mechanics ----
+    constexpr int MAX_BLOCKS = 4;               // max air-placed blocks active at once
+    constexpr int MAX_TNT = 3;                  // max active TNT traps at once
+    constexpr int BLOCK_W = 16;
+    constexpr int BLOCK_H = 16;
+    constexpr int BLOCK_LIFE = 240;             // 4 seconds
+    constexpr int BLOCK_HP = 16;
+    constexpr int TNT_ARM_FRAMES = 20;          // grace delay before TNT triggers on touch
+    constexpr int TNT_LIFE = 600;
+    constexpr int PIG_MAX_HP = 36;
+    constexpr int PIG_HIT_CD = 28;
+    constexpr int PIG_MAX_HITS = 3;
+    constexpr int MAX_MATERIALS = 64;
+    constexpr int MINE_GAIN = 5;
+    constexpr int MAX_WEAPON_TIER = 4;          // 1=Wood(3), 2=Stone(10), 3=Iron(30), 4=Diamond(50)
+
     // ============================================================================================
     // DATA: what a move is, what a fighter is, what a stage is
     // ============================================================================================
 
-    enum { PROJ_WATER = 0, PROJ_EXPLOSION, PROJ_JUNK_PENCIL, PROJ_JUNK_APPLE, PROJ_JUNK_BAT, PROJ_JUNK_LAPTOP, PROJ_JUNK_BALL };    // which picture a shot uses (battle.h turns this into a sprite)
-    enum { FX_SPARK = 0 };                      // little effects (only the hit spark for now)
-    enum FinalSmashId { FS_NONE = 0, FS_WAFFLE_FIRE };
+    enum
+    {
+        PROJ_WATER = 0, PROJ_EXPLOSION,
+        PROJ_JUNK_PENCIL, PROJ_JUNK_APPLE, PROJ_JUNK_BAT, PROJ_JUNK_LAPTOP, PROJ_JUNK_BALL,
+        PROJ_FIREBALL, PROJ_BOOMERANG, PROJ_ARROW, PROJ_MINECART, PROJ_TNT, PROJ_SONIC_SLASH
+    };
+    enum { FX_SPARK = 0, FX_DUST = 1 };
+    enum FinalSmashId { FS_NONE = 0, FS_WAFFLE_FIRE, FS_FILIP_DROP, FS_UMB_MINECART, FS_WAFFLE_MEAL , FS_HARUE_COMBO , FS_HARUE_SLICE };
 
     // Which pose to show during a move. You have no attack sprites yet, so battle.h shows stand-in frames.
     // When you draw real ones, only pick_frame() in battle.h needs to change.
@@ -64,6 +96,11 @@ namespace battle
         // Filip (snep)
         ANIM_SNEP_JAB, ANIM_SNEP_HEAVY, ANIM_SNEP_FLIP, ANIM_SNEP_DSMASH, ANIM_SNEP_COUNTER, ANIM_SNEP_COUNTER_GRAB,
         ANIM_SNEP_SPIN_THROW, ANIM_SNEP_THROW_UP, ANIM_SNEP_LEAP, ANIM_SNEP_SCRATCH, ANIM_SNEP_DAIR,
+        ANIM_UMB_MINE, ANIM_UMB_SLASH, ANIM_UMB_PLACE, ANIM_UMB_BOW, ANIM_UMB_THROW,
+        ANIM_WAF_CHARGE,
+        ANIM_HAR_JAB, ANIM_HAR_FSMASH, ANIM_HAR_USMASH, ANIM_HAR_SPIN,
+        ANIM_HAR_CHARGE, ANIM_HAR_BSHOT, ANIM_HAR_DASH, ANIM_HAR_UPDOWN,
+        ANIM_HAR_REFLECT, ANIM_HAR_FS,
     };
 
     // Every button + direction combination is a SLOT. A fighter's MoveSet says which move sits in each slot.
@@ -100,6 +137,9 @@ namespace battle
         bool keep_grab = false;     // on a victim that is grabbed: damage only, they stay held (the scratches)
         int pogo = 0;               // >0: the attacker bounces off the victim with this speed (fp), like a pogo stick
         bool absolute = false;      // x is NOT relative to where the fighter faces: negative = the LEFT of the screen
+        bool weapon_scaled = false;
+        bool hits_ally = false;
+        int delayed_boom_dmg = 0;
 
         constexpr Hitbox frames(int s, int e) const { Hitbox b = *this; b.start = s; b.end = e; return b; }
         constexpr Hitbox at(int px, int py) const   { Hitbox b = *this; b.x = px; b.y = py; return b; }
@@ -111,6 +151,9 @@ namespace battle
         constexpr Hitbox keeps_grab() const         { Hitbox b = *this; b.keep_grab = true; return b; }
         constexpr Hitbox bounces(int speed_fp) const { Hitbox b = *this; b.pogo = speed_fp; return b; }
         constexpr Hitbox left_right() const         { Hitbox b = *this; b.absolute = true; return b; }
+        constexpr Hitbox weapon() const             { Hitbox b = *this; b.weapon_scaled = true; return b; }
+        constexpr Hitbox hits_teammates() const     { Hitbox b = *this; b.hits_ally = true; return b; }
+        constexpr Hitbox delayed_boom(int dmg) const { Hitbox b = *this; b.delayed_boom_dmg = dmg; return b; }
     };
 
     // Something that flies away (or just appears and stays, like an explosion).
@@ -130,6 +173,12 @@ namespace battle
         int grav = 0;               // fp per frame: pulls the shot down (thrown objects fly in an arc). 0 = flies straight
         const char* label = nullptr;    // shown as text instead of a picture (until there are pictures for it)
         int boom = 0;               // > 0: when it hits (or lands) it explodes, with this much damage
+        int spread = 0;
+        int boom_accel = 0;
+        bool weapon_scaled = false;
+        bool friendly_fire = false;
+        int heal_ally = 0;
+        int final_smash = FS_NONE;
 
         constexpr Shot of(int k) const              { Shot s = *this; s.kind = k; return s; }
         constexpr Shot dmg(int d) const             { Shot s = *this; s.damage = d; return s; }
@@ -146,6 +195,12 @@ namespace battle
         }
         constexpr Shot labeled(const char* text) const { Shot s = *this; s.label = text; return s; }
         constexpr Shot explodes(int boom_damage) const { Shot s = *this; s.boom = boom_damage; return s; }
+        constexpr Shot fan(int spread_vx_fp) const     { Shot s = *this; s.spread = spread_vx_fp; return s; }
+        constexpr Shot boomerang(int accel_fp) const   { Shot s = *this; s.boom_accel = accel_fp; return s; }
+        constexpr Shot weapon() const                  { Shot s = *this; s.weapon_scaled = true; return s; }
+        constexpr Shot hurts_everyone() const          { Shot s = *this; s.friendly_fire = true; return s; }
+        constexpr Shot starts_final_smash(int id) const { Shot s = *this; s.final_smash = id; return s; }
+        constexpr Shot heals_ally(int hp) const         { Shot s = *this; s.heal_ally = hp; return s; }
     };
 
     // The fighter FLIES for a while: gravity is off and the speed is forced (aqua jet).
@@ -172,10 +227,12 @@ namespace battle
         Hitbox hits[MAX_HITBOXES] = {};
         int hit_count = 0;
         Drive drive = {};
+        Drive drive2 = {};
         int shot_frame = -1;        // the frame the shot is fired (-1 = this move fires nothing at a set time)
         Shot shot = {};
         int land_frame = 0;         // MF_FIRE_ON_LAND: the move jumps to this frame when it lands (so only the recovery is left)
         int absorb_start = 0, absorb_end = 0;   // frames where enemy shots that touch the fighter are stolen
+        int reflect_start = 0, reflect_end = 0;
         int power = 100;            // MF_USE_STORED: % of the stolen shot's damage and speed
         const Move* alt = nullptr;  // used INSTEAD of this move while the fighter is holding a stolen shot
         const Shot* shot_list = nullptr;    // fires_random: one of these is picked each time
@@ -188,7 +245,19 @@ namespace battle
         const Move* on_absorb = nullptr;                       // a shot that was stolen (absorbs) starts this move at once
         const Move* on_grab = nullptr;                         // a hitbox with grabs() connected: this move takes over
         int land_end = 0;           // ends_on_landing: when a downward dash touches the ground, jump to this frame
-        int final_smash = FS_NONE; // >0: landing a melee hit with this move starts this Final Smash
+        int final_smash = FS_NONE;
+        int tech_frame = -1;
+        bool mines = false;
+        bool crafts = false;
+        bool places_block = false;
+        bool places_tnt = false;
+        bool mounts_pig = false;
+        bool charges_clone = false;
+        int ally_final_smash = FS_NONE;
+        bool charges_power = false;
+        bool summons_har_clone = false;
+        bool in_stage_fs = false;
+        int powered_fs = FS_NONE;
 
         constexpr Move() = default;
         constexpr Move(const char* n, int total_frames, int pose) : name(n), duration(total_frames), anim(pose) {}
@@ -237,6 +306,19 @@ namespace battle
         constexpr Move ends_on_landing(int frame) const { Move m = *this; m.land_end = frame; return m; }
         constexpr Move orbits_held() const { Move m = *this; m.flags |= MF_ORBIT_HELD; return m; }
         constexpr Move starts_final_smash(int id) const { Move m = *this; m.final_smash = id; return m; }
+        constexpr Move mine_mat(int frame) const     { Move m = *this; m.tech_frame = frame; m.mines = true; return m; }
+        constexpr Move craft_weapon(int frame) const { Move m = *this; m.tech_frame = frame; m.crafts = true; return m; }
+        constexpr Move place_block(int frame) const  { Move m = *this; m.tech_frame = frame; m.places_block = true; return m; }
+        constexpr Move place_tnt(int frame) const    { Move m = *this; m.tech_frame = frame; m.places_tnt = true; return m; }
+        constexpr Move mount_pig(int frame) const    { Move m = *this; m.tech_frame = frame; m.mounts_pig = true; return m; }
+        constexpr Move charge_clone() const          { Move m = *this; m.charges_clone = true; return m; }
+        constexpr Move ally_fs(int id) const         { Move m = *this; m.ally_final_smash = id; return m; }
+        constexpr Move dash2(const Drive& d) const { Move m = *this; m.drive2 = d; return m; }
+        constexpr Move reflects(int s, int e) const { Move m = *this; m.reflect_start = s; m.reflect_end = e; return m; }
+        constexpr Move charge_power() const { Move m = *this; m.charges_power = true; return m; }
+        constexpr Move summon_har_clone(int frame = 6) const { Move m = *this; m.tech_frame = frame; m.summons_har_clone = true; return m; }
+        constexpr Move in_stage_final_smash(int id) const { Move m = *this; m.final_smash = id; m.in_stage_fs = true; return m; }
+        constexpr Move powered_final_smash(int id) const { Move m = *this; m.powered_fs = id; return m; }
     };
 
     // Which move sits in which slot. nullptr = this fighter simply has no such move.
@@ -273,6 +355,7 @@ namespace battle
         int phys_pct = 100;     // % of damage dealt by A moves (jab, smashes, aerials). 100 = normal, 120 = 20% stronger
         int magic_pct = 100;    // % of damage dealt by B moves (water gun, aqua jets...)
         const Move* final_smash_move = nullptr; // starter move launched when SELECT is pressed with full meter
+        bool spawns_crafting_table = false;
     };
 
     // A small bonus from a companion that follows you but does not fight (main.cpp turns NPC traits into one of these).
@@ -332,6 +415,7 @@ namespace battle
         bool jump = false;      // pressed this frame
         bool attack = false;    // A pressed this frame
         bool special = false;   // B pressed this frame
+        bool special_held = false; // B held this frame
         bool shield = false;    // held
         bool final_smash = false;
     };
@@ -373,6 +457,27 @@ namespace battle
         // grabs: grabbed_by = the fighter holding me (-1 = nobody), holding = the fighter I am holding
         int grabbed_by = -1;
         int holding = -1;
+        bool has_table = false;
+        int table_x16 = 0, table_y16 = 0;
+        int materials = 0;
+        int weapon_tier = 0;
+        int weapon_dur = 0;
+        bool on_pig = false;
+        int pig_hp = 0;
+        int pig_hit_cd = 0;
+        int pig_hits = 0;
+        bool active = false;
+        bool is_clone = false;
+        int clone_of = -1;
+        int clone_charge = 0;
+        int clone_timer = 0;
+        int def_buff_timer = 0;
+        int def_buff_amount = 0;
+        int har_charge = 0;
+        int har_power_timer = 0;
+        int bomb_timer = 0;
+        int bomb_owner = -1;
+        int bomb_dmg = 0;
     };
 
     struct Projectile
@@ -386,8 +491,22 @@ namespace battle
         int age = 0;
         int life = 0;
         bool hit_done = false;
+        int boom_dir = 1;
+        bool boom_flipped = false;
         Shot shot = {};
     };
+
+    struct PlacedBlock
+    {
+        bool active = false;
+        int id = 0;
+        int owner = 0;
+        int x = 0, y = 0, w = BLOCK_W;
+        int life = 0;
+        int hp = BLOCK_HP;
+    };
+
+
 
     // little pictures that play once (hit sparks). battle.h draws them.
     struct Effect
@@ -412,6 +531,9 @@ namespace battle
         bool jump = false;
         bool ko = false;
         bool hitsmash = false;
+        bool final_smash_start = false;
+        bool grab = false;
+        bool mining = false;
     };
 
     // The computer's memory
@@ -443,53 +565,149 @@ namespace battle
     struct Fight
     {
         StageGeom stage = {};
-        Fighter f[3];               // f[0] = the player, f[1] = the opponent, f[2] = the player's partner (only if count == 3)
+        Fighter f[MAX_FIGHTERS];               // f[0] = the player, f[1] = the opponent, f[2] = the player's partner (only if count == 3)
         int count = 2;              // 2 = one on one, 3 = you and a partner against the opponent
         Projectile proj[MAX_PROJECTILES];
+        PlacedBlock blocks[MAX_BLOCKS];
         Effect fx[MAX_EFFECTS];
-        Ai ai[3];
+        Ai ai[MAX_FIGHTERS];
+        FighterStats clone_stats[2] = {};
+        const FighterStats* waffle_ref_stats = nullptr;
         Events ev;
         unsigned rng = 1;
         int frame = 0;
         int winner = -1;            // -1 = still fighting, 0 = the player won, 1 = the opponent won
         int pending_final_smash = -1;
+        int fs_slow_tick = 0;
+        int fs_freeze_timer = 0;
+        int fs_freeze_user = -1;
+        bool fs_combo_active = false;
+        int fs_combo_tick = 0;
+        int fs_combo_atk = 0;
+        int fs_combo_vic = 1;
+        int fs_combo_clone = 3;
+        int fs_combo_home_x = 120;
         int pending_final_smash_victim = -1;
         int pending_final_smash_id = FS_NONE;
         int debug_ai_mode = DBG_AI_NORMAL;
+        int debug_ai_target = 1;
+        bool net_client = false;
         int debug_force_slot = SLOT_SPECIAL;
         int debug_cd = 0;
         int next_projectile_id = 0;
+        int next_block_id = 0;
 
-        void apply_final_smash_hit(int attacker_idx, int victim_idx, int damage, int kb_x, int kb_y, int stun)
+        // FNV-1a over everything that decides the fight. Both consoles must get the same value after the same
+        // number of sim frames; if they don't, the simulation is not deterministic somewhere (lockstep netplay check).
+        unsigned state_hash() const
+        {
+            unsigned h = 2166136261u;
+            auto mix = [&h](int v) { h = (h ^ unsigned(v)) * 16777619u; };
+            mix(int(rng)); mix(frame); mix(winner);
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
+            {
+                const Fighter& p = f[i];
+                mix(p.active ? 1 : 0);
+                if(!p.active) { continue; }
+                mix(p.x16); mix(p.y16); mix(p.vx); mix(p.vy); mix(p.hp); mix(p.shield); mix(p.smash);
+                mix(p.state); mix(p.timer); mix(p.move_frame); mix(p.facing);
+                mix(p.har_charge); mix(p.har_power_timer); mix(p.bomb_timer);
+            }
+            return h;
+        }
+
+        static bool on_crafting_table(const Fighter& p)
+        {
+            return p.has_table &&
+                   abs_i(p.x16 - p.table_x16) <= 18 * FP &&
+                   abs_i(p.y16 - p.table_y16) <= 22 * FP;
+        }
+
+        static int tier_cost(int tier)
+        {
+            switch(tier)
+            {
+                case 1: return 3;   // Wood
+                case 2: return 10;  // Stone
+                case 3: return 30;  // Iron
+                case 4: return 50;  // Diamond
+                default: return 0;
+            }
+        }
+
+        static int tier_durability(int tier)
+        {
+            switch(tier)
+            {
+                case 1: return 1;   // Wood
+                case 2: return 3;   // Stone
+                case 3: return 5;   // Iron
+                case 4: return 10;  // Diamond
+                default: return 0;
+            }
+        }
+
+        static int next_craft_tier(const Fighter& p)
+        {
+            for(int t = MAX_WEAPON_TIER; t > p.weapon_tier; --t)
+            {
+                if(p.materials >= tier_cost(t)) { return t; }
+            }
+            return 0;
+        }
+
+        void apply_final_smash_hit(int attacker_idx, int victim_idx, int damage, int kb_x, int kb_y, int stun,
+                                   int heal = 0, int def_bonus = 0, int def_frames = 0)
         {
             ev = Events();
-            for(int i = 0; i < count; ++i)
+            fs_freeze_timer = 0;
+            fs_freeze_user = -1;
+            fs_combo_active = false;
+            fs_combo_tick = 0;
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
             {
+                if(!f[i].active) { continue; }
                 release_grab(i);
                 cancel_move(f[i]);
+                f[i].on_pig = false;
+                f[i].pig_hp = 0;
+                f[i].pig_hits = 0;
+                f[i].pig_hit_cd = 0;
                 if(f[i].state != ST_KO) { f[i].state = f[i].on_ground ? ST_IDLE : ST_AIR; }
             }
             for(Projectile& p : proj) { p.active = false; }
 
             Fighter& attacker = f[attacker_idx];
             Fighter& victim = f[victim_idx];
-            if(victim.state == ST_KO) { return; }
+            if(!victim.active || victim.state == ST_KO) { return; }
+
+            if(heal > 0 || def_bonus > 0)
+            {
+                victim.hp += heal;
+                if(victim.hp > victim.stats->max_hp) { victim.hp = victim.stats->max_hp; }
+                if(def_bonus > 0)
+                {
+                    victim.def_buff_amount = def_bonus;
+                    victim.def_buff_timer = def_frames;
+                }
+                spawn_effect(FX_SPARK, victim.x16, victim.y16 - (victim.stats->body_h * FP) / 2, 14);
+                ev.absorb = true;
+                return;
+            }
 
             int dir = sign_i(victim.x16 - attacker.x16);
             if(dir == 0) { dir = attacker.facing; }
             attacker.facing = dir;
 
-            if(victim.state == ST_SHIELD) { victim.state = ST_IDLE; }   // Final Smashes break through guard
+            if(victim.state == ST_SHIELD) { victim.state = ST_IDLE; }
 
             hit(victim, damage, kb_x, kb_y, stun, dir, victim.x16, victim.y16 - (victim.stats->body_h * FP) / 2, nullptr);
-            if(victim.hp <= 0 && winner < 0)
+            if(victim.hp <= 0 && winner < 0 && victim_idx < 2)
             {
                 winner = team_of(attacker_idx) == 0 ? 0 : 1;
             }
         }
 
-        // `partner` (optional) is a computer-controlled fighter on the PLAYER's side: a 2 against 1 fight.
-        // The stats are only pointed at, not copied: they have to stay alive for the whole fight.
         void start(const StageGeom& geometry, const FighterStats& player, const FighterStats& enemy, unsigned seed,
                    const FighterStats* partner = nullptr)
         {
@@ -500,13 +718,22 @@ namespace battle
             frame = 0;
             winner = -1;
             pending_final_smash = -1;
+            fs_slow_tick = 0;
+            fs_freeze_timer = 0;
+            fs_freeze_user = -1;
+            fs_combo_active = false;
+            fs_combo_tick = 0;
             pending_final_smash_victim = -1;
             pending_final_smash_id = FS_NONE;
             debug_ai_mode = DBG_AI_NORMAL;
+            debug_ai_target = 1;
             debug_force_slot = SLOT_SPECIAL;
+            net_client = false;
             debug_cd = 0;
             next_projectile_id = 0;
+            next_block_id = 0;
             for(Projectile& p : proj) { p = Projectile(); }
+            for(PlacedBlock& b : blocks) { b = PlacedBlock(); }
             for(Effect& e : fx) { e = Effect(); }
             for(Ai& brain : ai) { brain = Ai(); }
 
@@ -519,9 +746,10 @@ namespace battle
                 player_x - PARTNER_SPACING >= BODY_MARGIN ? player_x - PARTNER_SPACING : player_x + PARTNER_SPACING,
             };
 
-            for(int i = 0; i < 3; ++i) { f[i] = Fighter(); }              // (an unused slot stays empty and is never touched)
+            for(int i = 0; i < MAX_FIGHTERS; ++i) { f[i] = Fighter(); }
             for(int i = 0; i < count; ++i)
             {
+                f[i].active = true;
                 f[i].stats = stats[i];
                 f[i].x16 = spawn[i] * FP;
                 f[i].y16 = geometry.ground_y * FP;
@@ -530,32 +758,109 @@ namespace battle
                 f[i].jumps_left = stats[i]->max_jumps;
                 f[i].facing = team_of(i) == 0 ? 1 : -1;
                 f[i].state = ST_IDLE;
+                if(stats[i]->spawns_crafting_table)
+                {
+                    f[i].has_table = true;
+                    f[i].table_x16 = spawn[i] * FP;
+                    f[i].table_y16 = geometry.ground_y * FP;
+                }
             }
         }
 
-        // Advance the fight by one frame. in[0] = the player's input, in[1] = the opponent's, in[2] = the partner's
-        // (in[2] is only read when there is a partner).
+        int active_fs_user() const
+        {
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
+            {
+                if(f[i].active && f[i].state == ST_ATTACK && f[i].move && f[i].move->final_smash != FS_NONE)
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
         void step(const Input* in)
         {
             ev = Events();
-            for(int i = 0; i < count; ++i)
+
+            if(fs_freeze_timer > 0)
             {
-                update_fighter(i, in[i]);
-                if(pending_final_smash >= 0) { return; }   // pause frame immediately for cutscene
+                --fs_freeze_timer;
+                if(fs_freeze_timer == 0)
+                {
+                    fs_freeze_user = -1;
+                    ev.swing = true;
+                }
+                return;
+            }
+
+            if(fs_combo_active)
+            {
+                step_harue_fs();
+                return;
+            }
+
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
+            {
+                Fighter& p = f[i];
+                if(!p.active || p.is_clone) { continue; }
+                const FighterStats& s = *p.stats;
+                const bool free_state = p.state == ST_IDLE || p.state == ST_WALK || p.state == ST_AIR || p.state == ST_SHIELD;
+                if(winner < 0 && p.state != ST_KO && p.state != ST_GRABBED && free_state &&
+                   in[i].final_smash && s.final_smash_move && p.smash >= SMASH_MAX)
+                {
+                    p.smash = 0;
+                    p.on_pig = false;
+                    p.pig_hp = 0;
+                    p.pig_hits = 0;
+                    p.pig_hit_cd = 0;
+                    if(in[i].move != 0) { p.facing = in[i].move; }
+                    begin_move(p, s.final_smash_move, true);
+                    fs_freeze_timer = FS_FREEZE_FRAMES;
+                    fs_freeze_user = i;
+                    ev.final_smash_start = true;
+                    return;
+                }
+            }
+
+            const int fs_user = active_fs_user();
+            bool world_tick = true;
+            if(fs_user >= 0)
+            {
+                ++fs_slow_tick;
+                world_tick = (fs_slow_tick % 4) == 0;
+            }
+            else { fs_slow_tick = 0; }
+
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
+            {
+                if(!f[i].active) { continue; }
+                if(world_tick || i == fs_user) { update_fighter(i, in[i]); }
+                if(pending_final_smash >= 0) { return; }
             }
             resolve_melee();
             if(pending_final_smash >= 0) { return; }
-            for(int i = 0; i < count; ++i) { advance_move(i); }
-            update_grabs();
-            update_projectiles();
-            for(Effect& e : fx) { if(e.active && ++e.age >= e.life) { e.active = false; } }
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
+            {
+                if(!f[i].active) { continue; }
+                if(world_tick || i == fs_user) { advance_move(i); }
+            }
+            if(world_tick)
+            {
+                update_grabs();
+                update_blocks();
+                update_projectiles();
+                if(pending_final_smash >= 0) { return; }
+                for(Effect& e : fx) { if(e.active && ++e.age >= e.life) { e.active = false; } }
+            }
             ++frame;
 
             if(winner < 0 && frame % SMASH_PASSIVE_FRAMES == 0)
             {
-                for(int i = 0; i < count; ++i)
+                for(int i = 0; i < MAX_FIGHTERS; ++i)
                 {
-                    if(f[i].stats->final_smash_move != nullptr && f[i].state != ST_KO && f[i].smash < SMASH_MAX)
+                    if(f[i].active && !f[i].is_clone && f[i].stats->final_smash_move != nullptr &&
+                       f[i].state != ST_KO && f[i].smash < SMASH_MAX)
                     {
                         ++f[i].smash;
                     }
@@ -571,21 +876,36 @@ namespace battle
         }
 
         // Teams: the player (0) and the partner (2) against the opponent (1).
-        static int team_of(int i) { return i == 1 ? 1 : 0; }
+        static int team_of(int i) { return (i == 1 || i == 4) ? 1 : 0; }
 
-        // The fighter that fighter i is fighting. The player and the partner both fight the opponent. The opponent fights
-        // whichever of the two is closest (a knocked-out one is ignored).
         int foe_of(int i) const
         {
-            if(team_of(i) == 0) { return 1; }
-            if(count < 3) { return 0; }
-            const bool first_down = f[0].state == ST_KO;
-            const bool partner_down = f[2].state == ST_KO;
-            if(first_down != partner_down) { return first_down ? 2 : 0; }
-            return abs_i(f[0].x16 - f[i].x16) <= abs_i(f[2].x16 - f[i].x16) ? 0 : 2;
+            const int my_team = team_of(i);
+            int best = my_team == 0 ? 1 : 0;
+            int best_dist = 0x7FFFFFFF;
+            for(int j = 0; j < MAX_FIGHTERS; ++j)
+            {
+                if(!f[j].active || f[j].state == ST_KO || team_of(j) == my_team) { continue; }
+                const int d = abs_i(f[j].x16 - f[i].x16);
+                if(d < best_dist) { best_dist = d; best = j; }
+            }
+            return best;
         }
 
-        // Which slot do these buttons mean?  (public: the computer and the tests use it too)
+        int ally_of(int i) const
+        {
+            const int my_team = team_of(i);
+            int best = -1;
+            int best_dist = 0x7FFFFFFF;
+            for(int j = 0; j < MAX_FIGHTERS; ++j)
+            {
+                if(j == i || !f[j].active || f[j].state == ST_KO || team_of(j) != my_team) { continue; }
+                const int d = abs_i(f[j].x16 - f[i].x16);
+                if(d < best_dist) { best_dist = d; best = j; }
+            }
+            return best;
+        }
+
         static int pick_slot(const Input& in, const Fighter& p)
         {
             const bool up = in.up && !in.down;
@@ -624,7 +944,6 @@ namespace battle
             return true;
         }
 
-        // The computer decides what to press. Use the result as in[1] (or in[0] to let it play for you).
         Input think(int self)
         {
             Input in;
@@ -633,15 +952,16 @@ namespace battle
             Ai& brain = ai[self];
             if(winner >= 0 || me.state == ST_KO) { return in; }
 
-            if(self == 1 && debug_ai_mode == DBG_AI_IDLE)
+            if(self == debug_ai_target && debug_ai_mode == DBG_AI_IDLE)
             {
                 return in;
             }
-            if(self == 1 && debug_ai_mode == DBG_AI_FORCE)
+            if(self == debug_ai_target && debug_ai_mode == DBG_AI_FORCE)
             {
                 const bool can_act_dbg = me.state == ST_IDLE || me.state == ST_WALK || me.state == ST_AIR;
                 if(!can_act_dbg) { return in; }
                 if(debug_cd > 0) { --debug_cd; return in; }
+                if(me.on_pig) { in.jump = true; debug_cd = 10; return in; }
 
                 const int toward_dbg = op.x16 >= me.x16 ? 1 : -1;
                 if(debug_force_slot == SLOT_COUNT)
@@ -649,9 +969,35 @@ namespace battle
                     if(!me.stats->final_smash_move || op.state == ST_KO) { return in; }
                     if(me.smash < SMASH_MAX) { f[self].smash = SMASH_MAX; }
                     const int adx_dbg = abs_i(op.x16 - me.x16) / FP;
-                    if(adx_dbg > 44 || me.facing != toward_dbg) { in.move = toward_dbg; return in; }
+                    const int max_r = (me.stats->final_smash_move->shot_frame >= 0) ? 160 : 44;
+                    if(adx_dbg > max_r || me.facing != toward_dbg) { in.move = toward_dbg; return in; }
                     in.final_smash = true;
                     debug_cd = 25;
+                    return in;
+                }
+
+                if(debug_force_slot == SLOT_COUNT + 1)
+                {
+                    if(!me.stats->spawns_crafting_table) { return in; }
+                    if(me.materials < 1) { f[self].materials = 1; }
+                    if(me.on_ground) { in.jump = true; return in; }
+                    in.special = true;
+                    debug_cd = 25;
+                    return in;
+                }
+                if(debug_force_slot == SLOT_COUNT + 2)
+                {
+                    if(!me.stats->spawns_crafting_table) { return in; }
+                    if(me.weapon_tier >= MAX_WEAPON_TIER) { f[self].weapon_tier = 0; f[self].weapon_dur = 0; }
+                    const int cost = tier_cost(me.weapon_tier + 1);
+                    if(me.materials < cost) { f[self].materials = cost; }
+                    if(!on_crafting_table(me))
+                    {
+                        in.move = me.table_x16 >= me.x16 ? 1 : -1;
+                        return in;
+                    }
+                    in.special = true;
+                    debug_cd = 28;
                     return in;
                 }
 
@@ -659,11 +1005,7 @@ namespace battle
                 if(!has_move(*me.stats, slot)) { return in; }
 
                 const bool is_aerial = slot >= SLOT_NAIR && slot <= SLOT_DAIR;
-                if(is_aerial && me.on_ground)
-                {
-                    in.jump = true;
-                    return in;
-                }
+                if(is_aerial && me.on_ground) { in.jump = true; return in; }
 
                 const int wanted_face = (slot == SLOT_BAIR) ? -toward_dbg : toward_dbg;
                 if(me.facing != wanted_face && slot != SLOT_SPECIAL_SIDE && slot != SLOT_FSMASH)
@@ -694,36 +1036,158 @@ namespace battle
             }
 
             const FighterStats& s = *me.stats;
-            const int dx = (op.x16 - me.x16) / FP;            // + = the opponent is on my right
-            const int dy = (op.y16 - me.y16) / FP;            // + = the opponent is below me
+            const int dx = (op.x16 - me.x16) / FP;
+            const int dy = (op.y16 - me.y16) / FP;
             const int adx = abs_i(dx);
             const int ady = abs_i(dy);
-            const int toward = dx > 0 ? 1 : -1;
+            const int toward = dx >= 0 ? 1 : -1;
             const bool can_act = me.state == ST_IDLE || me.state == ST_WALK || me.state == ST_AIR;
 
-            // falling through a platform means holding DOWN for a few frames
             if(brain.drop_hold > 0) { --brain.drop_hold; in.down = true; return in; }
 
-            // 0. If Final Smash is ready and within range, activate it!
-            if(can_act && s.final_smash_move && me.smash >= SMASH_MAX && op.state != ST_KO && adx < 52 && ady < 32)
+            if(me.state == ST_ATTACK && me.move && me.move->charges_clone)
             {
-                if(me.facing != toward) { in.move = toward; return in; }
-                if(random_below(100) < 35 + s.ai_skill / 2)
+                if(adx > 42 || ady > 36)
                 {
-                    in.final_smash = true;
+                    in.special_held = true;
+                    in.up = true;
+                }
+                return in;
+            }
+
+            // Deterministic RNG-free AI for Water Clones (never touches Fight::rng or desyncs Netplay)
+            if(me.is_clone)
+            {
+                const FighterStats& cs = *me.stats;
+                const int cdx = (op.x16 - me.x16) / FP;
+                const int cdy = (op.y16 - me.y16) / FP;
+                const int cadx = abs_i(cdx);
+                const int cady = abs_i(cdy);
+                const int ctow = cdx >= 0 ? 1 : -1;
+                const bool cact = me.state == ST_IDLE || me.state == ST_WALK || me.state == ST_AIR;
+                const int phase = (frame + self * 11) % 60;
+
+                if(me.on_pig)
+                {
+                    if(me.pig_hp <= 12 || (cdy < -36 && cadx < 60)) { in.jump = true; return in; }
+                    in.move = ctow;
+                    return in;
+                }
+
+                if(cadx > 26) { in.move = ctow; }
+                else if(cadx < 12) { in.move = (phase < 20) ? -ctow : 0; }
+
+                if(cact)
+                {
+                    if(cadx < 34 && cady < 28)
+                    {
+                        if(me.facing != ctow) { in.move = ctow; }
+                        else if(phase % 15 == 0) { in.move = 0; in.attack = true; }
+                        else if(phase % 15 == 7) { in.move = ctow; in.attack = true; }
+                    }
+                    else if(cdy < -24 && cadx < 48 && phase % 18 == 0)
+                    {
+                        in.up = true;
+                        if(cadx < 28) { in.attack = true; }
+                        else if(has_move(cs, SLOT_SPECIAL_UP) && !cs.moves->slot[SLOT_SPECIAL_UP]->charges_clone) { in.special = true; }
+                    }
+                    else if(!me.on_ground && cdy > 20 && cadx < 24 && phase % 12 == 0)
+                    {
+                        in.down = true; in.attack = true;
+                    }
+                    else if(cady < 26 && cadx > 48 && phase % 29 == 0)
+                    {
+                        const Move* side_b = cs.moves ? cs.moves->slot[SLOT_SPECIAL_SIDE] : nullptr;
+                        const Move* gun = cs.moves ? cs.moves->slot[SLOT_SPECIAL] : nullptr;
+                        if(side_b && cadx > 60 && cadx < 110) { in.move = ctow; in.special = true; }
+                        else if(gun && gun->shot_frame >= 0)
+                        {
+                            if(me.facing == ctow) { in.move = 0; in.special = true; }
+                            else                  { in.move = ctow; }
+                        }
+                    }
+                }
+
+                if(!in.attack && !in.special && me.on_ground)
+                {
+                    if(in.move != 0)
+                    {
+                        const int lx = me.x16 / FP + in.move * (cs.body_w / 2 + 8);
+                        for(const PlacedBlock& bl : blocks)
+                        {
+                            if(bl.active && lx >= bl.x && lx <= bl.x + bl.w &&
+                               me.y16 / FP > bl.y && me.y16 / FP - cs.body_h < bl.y + BLOCK_H)
+                            {
+                                in.jump = true;
+                                break;
+                            }
+                        }
+                    }
+                    if(!in.jump && cdy < -30 && phase % 20 == 0) { in.jump = true; }
+                    else if(!in.jump && me.support >= 0 && me.support < stage.platform_count && cdy > 32 && phase % 20 == 0)
+                    {
+                        in.down = true;
+                    }
+                }
+                return in;
+            }
+
+            // 0. TNT awareness: dodge or jump away from nearby TNT
+            for(const Projectile& t : proj)
+            {
+                if(!t.active || t.shot.kind != PROJ_TNT) { continue; }
+                const int tdx = (t.x16 - me.x16) / FP;
+                const int tdy = abs_i((t.y16 + 8 * FP - me.y16) / FP);
+                if(abs_i(tdx) < 30 && tdy < 26)
+                {
+                    in.move = tdx >= 0 ? -1 : 1;
+                    if(me.on_ground && (t.age >= TNT_ARM_FRAMES - 4) && random_below(100) < 35) { in.jump = true; }
+                    else if(me.on_pig) { in.jump = true; }
                     return in;
                 }
             }
 
-            // 1. is a shot coming at me? decide ONCE per shot whether to react (the better the skill, the more often)
+            // 0b. Pig mount: charge at foe, jump off if pig low HP or foe is high above
+            if(me.on_pig)
+            {
+                if(me.pig_hp <= 12 || (dy < -36 && adx < 60) || (me.smash >= SMASH_MAX && s.final_smash_move))
+                {
+                    in.jump = true;
+                    return in;
+                }
+                in.move = toward;
+                return in;
+            }
+
+            // 0c. Final Smash
+            if(can_act && s.final_smash_move && me.smash >= SMASH_MAX && op.state != ST_KO)
+            {
+                const bool ranged_fs = s.final_smash_move->shot_frame >= 0;
+                const int max_dx = ranged_fs ? 175 : 52;
+                const int max_dy = ranged_fs ? 26 : 32;
+                if(adx < max_dx && ady < max_dy)
+                {
+                    if(me.facing != toward) { in.move = toward; return in; }
+                    if(random_below(100) < 35 + s.ai_skill / 2)
+                    {
+                        in.final_smash = true;
+                        return in;
+                    }
+                }
+            }
+
+            // 1. Incoming projectile reaction (also spots nearby enemy TNT for Fox Thief)
             const Projectile* threat = nullptr;
             int threat_dist = 9999;
             const int my_mid_y = me.y16 - (s.body_h * FP) / 2;
             for(const Projectile& p : proj)
             {
-                if(!p.active || team_of(p.owner) == team_of(self) || p.vx == 0) { continue; }
+                if(!p.active || (team_of(p.owner) == team_of(self) && !p.shot.friendly_fire)) { continue; }
+                const bool is_tnt = (p.shot.kind == PROJ_TNT && p.vx == 0 && team_of(p.owner) != team_of(self));
+                if(!is_tnt && p.vx == 0 && p.vy == 0) { continue; }
                 const int pdx = (p.x16 - me.x16) / FP;
-                const bool coming = (pdx > 0 && p.vx < 0) || (pdx < 0 && p.vx > 0);
+                const bool coming = is_tnt ? (abs_i(pdx) < 44)
+                                           : ((pdx > 0 && p.vx < 0) || (pdx < 0 && p.vx > 0) || (p.vx == 0 && abs_i(pdx) < 20));
                 const int pdy = abs_i((p.y16 - my_mid_y) / FP);
                 if(coming && abs_i(pdx) < 100 && pdy < s.body_h / 2 + p.shot.h / 2 + 4 && abs_i(pdx) < threat_dist)
                 {
@@ -732,11 +1196,11 @@ namespace battle
                 }
             }
 
-            // 1a. fox thief: steal the shot right as it arrives (it takes a few frames to get ready)
             if(threat && threat_dist < 76 && threat->id != brain.absorb_handled)
             {
                 brain.absorb_handled = threat->id;
-                if(can_act && !me.has_stored && threat->shot.absorbable && has_move(s, SLOT_SPECIAL_DOWN) && random_below(100) < s.ai_skill / 2)
+                if(can_act && !me.has_stored && threat->shot.absorbable && has_move(s, SLOT_SPECIAL_DOWN) &&
+                   s.moves->slot[SLOT_SPECIAL_DOWN]->absorb_end > 0 && random_below(100) < s.ai_skill / 2)
                 {
                     brain.handled_projectile = threat->id;
                     in.special = true;
@@ -745,8 +1209,7 @@ namespace battle
                 }
             }
 
-            // 1b. otherwise guard or jump over it
-            if(threat && threat->id != brain.handled_projectile)
+            if(threat && threat->id != brain.handled_projectile && (threat->vx != 0 || threat->vy != 0))
             {
                 brain.handled_projectile = threat->id;
                 if(me.on_ground && random_below(100) < s.ai_skill)       { brain.shield_hold = 18 + random_below(10); }
@@ -756,10 +1219,9 @@ namespace battle
             {
                 --brain.shield_hold;
                 in.shield = true;
-                return in;                                                // while guarding, do nothing else
+                return in;
             }
 
-            // 1c. is the opponent swinging at me? (decided once per swing, so a better player guards more often)
             if(me.on_ground && can_act && op.state == ST_ATTACK && op.move && op.move->hit_count > 0 && adx < 46 && ady < 34 &&
                frame - brain.last_react > 25)
             {
@@ -773,7 +1235,6 @@ namespace battle
                 return in;
             }
 
-            // 2. holding a stolen shot? throw it back
             if(me.has_stored && can_act && has_move(s, SLOT_SPECIAL_DOWN) && ady < 26 && adx < 170 && random_below(100) < 6)
             {
                 in.move = toward;
@@ -782,87 +1243,200 @@ namespace battle
                 return in;
             }
 
-            // 3. movement. Sometimes it keeps its distance and shoots, sometimes it rushes in and fights close
+            // 2b. Umbreon mining & crafting priority
+            if(s.spawns_crafting_table && can_act && me.on_ground && me.weapon_tier < MAX_WEAPON_TIER && adx > 46)
+            {
+                const int can_tier = next_craft_tier(me);
+                if(can_tier > 0 && (adx > 65 || me.weapon_tier == 0 || can_tier >= me.weapon_tier + 2))
+                {
+                    if(on_crafting_table(me))
+                    {
+                        in.special = true;
+                        return in;
+                    }
+                    else
+                    {
+                        const int to_table = me.table_x16 >= me.x16 ? 1 : -1;
+                        if(sign_i(dx) != to_table || adx > 65)
+                        {
+                            in.move = to_table;
+                            return in;
+                        }
+                    }
+                }
+                else if(me.materials < MAX_MATERIALS && adx > 58 && random_below(100) < 15 + s.ai_skill / 8)
+                {
+                    in.special = true;
+                    return in;
+                }
+            }
+
+            // 2c. Umbreon midair block placement (costs 1 material)
+            if(s.spawns_crafting_table && can_act && !me.on_ground && me.materials >= 1 &&
+               me.vy >= 0 && me.y16 < (stage.ground_y - 16) * FP &&
+               random_below(100) < 10 + s.ai_skill / 10)
+            {
+                in.special = true;
+                return in;
+            }
+
+            // 3. Movement
             if(--brain.mode_timer <= 0)
             {
                 brain.mode_timer = 90 + random_below(150);
-                brain.rush = random_below(100) < 30 + s.ai_skill / 3;
+                brain.rush = random_below(100) < 35 + s.ai_skill / 3;
             }
-            const bool seeking_fs = me.stats->final_smash_move != nullptr && me.smash >= SMASH_MAX;
-            const int wanted_range = seeking_fs ? 18 : (brain.rush ? 22 : 105);
+            const bool seeking_fs = s.final_smash_move != nullptr && me.smash >= SMASH_MAX && s.final_smash_move->shot_frame < 0;
+            const int wanted_range = seeking_fs ? 18 : (brain.rush ? 24 : 96);
             if(--brain.strafe_timer <= 0)
             {
                 brain.strafe_timer = 25 + random_below(50);
                 brain.strafe = random_below(3) - 1;
             }
             if(adx > wanted_range + 25)       { in.move = toward; }
-            else if(adx < wanted_range - 45)  { in.move = -toward; }
+            else if(adx < wanted_range - 40)  { in.move = -toward; }
             else                              { in.move = brain.strafe; }
 
-            // 4. attacks
+            // 4. Attacks
             if(can_act)
             {
                 const bool grounded = me.on_ground;
                 const bool facing_op = me.facing == toward;
-                const int urge = 2 + s.ai_skill / 20 + (brain.rush ? 3 : 0);          // % chance per frame
+                const int urge = 2 + s.ai_skill / 20 + (brain.rush ? 3 : 0);
 
-                if(adx < 34 && ady < 30)                                              // close: melee
+                if(adx < 36 && ady < 30)
                 {
                     if(random_below(100) < urge + 4)
                     {
                         const int r = random_below(100);
                         if(grounded)
                         {
-                            // (a neutral press needs in.move = 0, or the direction the computer is walking turns it into a smash)
-                            if(r < 40)                                 { if(facing_op) { in.move = 0; in.attack = true; } else { in.move = toward; } }   // slap combo
-                            else if(r < 70)                            { in.move = toward; in.attack = true; }                                           // forward smash
-                            else if(r < 85)                            { in.down = true; in.attack = true; }                                             // down smash
-                            else                                       { if(facing_op) { in.move = 0; in.attack = true; } }
+                            if(s.spawns_crafting_table && !facing_op && has_move(s, SLOT_DSMASH) && r < 55)
+                            {
+                                in.down = true; in.attack = true;
+                            }
+                            else if(r < 35)
+                            {
+                                if(facing_op) { in.move = 0; in.attack = true; } else { in.move = toward; }
+                            }
+                            else if(r < 72) { in.move = toward; in.attack = true; }
+                            else if(r < 90) { in.down = true; in.attack = true; }
+                            else if(s.spawns_crafting_table && has_move(s, SLOT_SPECIAL_DOWN))
+                            {
+                                in.down = true; in.special = true;
+                            }
                         }
                         else
                         {
-                            if(r < 40) { in.move = 0; in.attack = true; }                         // spin
-                            else       { in.move = toward; in.attack = true; }                     // kick (or tail slap if they are behind)
+                            if(r < 45) { in.move = 0; in.attack = true; }
+                            else       { in.move = toward; in.attack = true; }
                         }
                     }
                 }
-                else if(dy < -26 && adx < 30)                                          // they are above me
+                else if(s.moves && s.moves->slot[SLOT_SPECIAL_UP] && s.moves->slot[SLOT_SPECIAL_UP]->charges_clone &&
+                        !me.is_clone && me.hp > CLONE_HP_COST + 10 && !f[team_of(self) == 0 ? 3 : 4].active && adx > 95 && random_below(1000) < 12)
+                {
+                    in.up = true; in.special = true;
+                }
+                else if(dy < -24 && adx < 55)
                 {
                     const int r = random_below(100);
-                    if(r < urge + 2)                                { in.up = true; in.attack = true; }                                     // up smash / up air
-                    else if(r < urge + 4 && has_move(s, SLOT_SPECIAL_UP)) { in.up = true; in.special = true; }                                 // aqua jet up
+                    if(adx < 28 && r < urge + 3) { in.up = true; in.attack = true; }
+                    else if(r < urge + 5 && has_move(s, SLOT_SPECIAL_UP) && !s.moves->slot[SLOT_SPECIAL_UP]->charges_clone)
+                    {
+                        in.up = true; in.special = true;
+                    }
                 }
-                else if(!grounded && dy > 24 && adx < 22)                              // they are below me and I am in the air
+                else if(!grounded && dy > 24 && adx < 24)
                 {
-                    if(random_below(100) < urge + 4) { in.down = true; in.attack = true; }  // dair
+                    if(random_below(100) < urge + 4) { in.down = true; in.attack = true; }
                 }
-                else if(ady < 26)                                                      // roughly level: shoot or dash at them
+                else if(ady < 28)
                 {
-                    const Move* jet = s.moves ? s.moves->slot[SLOT_SPECIAL_SIDE] : nullptr;
+                    const Move* side_b = s.moves ? s.moves->slot[SLOT_SPECIAL_SIDE] : nullptr;
                     const Move* gun = s.moves ? s.moves->slot[SLOT_SPECIAL] : nullptr;
-                    const int jet_range = !jet ? 0 : (jet->leap_frame >= 0 ? jet->leap_vx * 16 / FP + 12 : jet->drive.vx * (jet->drive.end - jet->drive.start) / FP + 12);
+                    const Move* jab_m = s.moves ? s.moves->slot[SLOT_JAB] : nullptr;
                     const int gun_range = (gun && gun->shot_frame >= 0) ? gun->shot.speed * gun->shot.life / FP : 0;
 
-                    if(jet && adx > 40 && adx < jet_range && random_below(1000) < 6 + s.ai_skill / 10)
+                    if(s.spawns_crafting_table && grounded && adx >= 36 && adx <= 72 && op.vx * dx < 0 &&
+                       has_move(s, SLOT_SPECIAL_DOWN) && random_below(1000) < 12 + s.ai_skill / 8)
                     {
-                        in.move = toward;                                              // aqua jet
-                        in.special = true;
+                        in.down = true; in.special = true;
                     }
-                    else if(gun_range > 0 && adx > 40 && adx < gun_range && random_below(100) < 3 + s.ai_skill / 12)
+                    else if(jab_m && jab_m->shot_frame >= 0 && grounded && adx > 34 && adx < 115 && random_below(100) < 4 + s.ai_skill / 12)
                     {
-                        if(facing_op) { in.move = 0; in.special = true; }             // water gun (needs to face them first)
+                        if(facing_op) { in.move = 0; in.attack = true; }
                         else          { in.move = toward; }
+                    }
+                    else
+                    {
+                        const int jet_range = (!side_b || side_b->mounts_pig) ? 0
+                                            : (side_b->leap_frame >= 0
+                                               ? side_b->leap_vx * 16 / FP + 12
+                                               : side_b->drive.vx * (side_b->drive.end - side_b->drive.start) / FP + 12);
+                        const int gun_reach = gun_range > 0 ? (gun_range > 85 ? gun_range : 85) : 0;
+
+                        if(side_b && side_b->mounts_pig && adx > 65 && random_below(1000) < 10 + s.ai_skill / 8)
+                        {
+                            in.move = toward; in.special = true;
+                        }
+                        else if(jet_range > 0 && adx > 40 && adx < jet_range && random_below(1000) < 6 + s.ai_skill / 10)
+                        {
+                            in.move = toward; in.special = true;
+                        }
+                        else if(gun_reach > 0 && adx > 36 && adx < gun_reach && random_below(100) < 3 + s.ai_skill / 12)
+                        {
+                            if(facing_op) { in.move = 0; in.special = true; }
+                            else          { in.move = toward; }
+                        }
+                        else if(gun && gun->shot.heal_ally > 0)
+                        {
+                            const int al = ally_of(self);
+                            if(al >= 0 && f[al].hp < f[al].stats->max_hp * 85 / 100)
+                            {
+                                const int al_dx = (f[al].x16 - me.x16) / FP;
+                                const int al_dy = abs_i((f[al].y16 - me.y16) / FP);
+                                if(abs_i(al_dx) < 180 && al_dy < 26 && random_below(100) < 8)
+                                {
+                                    const int toward_al = al_dx >= 0 ? 1 : -1;
+                                    if(me.facing == toward_al) { in.move = 0; in.special = true; }
+                                    else                       { in.move = toward_al; }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            // 5. get to a different height
+            // 5. Vertical navigation + jumping over placed block walls
             if(!in.attack && !in.special)
             {
-                if(seeking_fs && me.on_ground && dy < -24 && random_below(100) < 12) { in.jump = true; }
-                else if(me.on_ground && dy < -36 && random_below(100) < 5)                        { in.jump = true; }
-                else if(me.on_ground && me.support >= 0 && dy > 36 && random_below(100) < 4) { brain.drop_hold = DROP_HOLD + 2; in.down = true; }
-                else if(me.on_ground && random_below(1000) < 4)                              { in.jump = true; }
+                if(me.on_ground && in.move != 0)
+                {
+                    const int look_x = me.x16 / FP + in.move * (s.body_w / 2 + 8);
+                    const int my_top = me.y16 / FP - s.body_h;
+                    const int my_bot = me.y16 / FP;
+                    for(const PlacedBlock& bl : blocks)
+                    {
+                        if(!bl.active) { continue; }
+                        if(look_x >= bl.x && look_x <= bl.x + bl.w && my_bot > bl.y && my_top < bl.y + BLOCK_H)
+                        {
+                            in.jump = true;
+                            break;
+                        }
+                    }
+                }
+                if(!in.jump)
+                {
+                    if(seeking_fs && me.on_ground && dy < -24 && random_below(100) < 12) { in.jump = true; }
+                    else if(me.on_ground && dy < -36 && random_below(100) < 5)           { in.jump = true; }
+                    else if(me.on_ground && me.support >= 0 && me.support < stage.platform_count && dy > 36 && random_below(100) < 4)
+                    {
+                        brain.drop_hold = DROP_HOLD + 2;
+                        in.down = true;
+                    }
+                    else if(me.on_ground && random_below(1000) < 4)                      { in.jump = true; }
+                }
             }
             return in;
         }
@@ -899,6 +1473,43 @@ namespace battle
         {
             return Rect{ t.x16 / FP, t.y16 / FP - t.stats->body_h / 2, t.stats->body_w, t.stats->body_h };
         }
+
+        static int scale_weapon_dmg(const Fighter& atk, int dmg)
+        {
+            switch(atk.weapon_tier)
+            {
+                case 1: return dmg * 120 / 100;   // Wood: 1.2x
+                case 2: return dmg * 145 / 100;   // Stone: 1.45x
+                case 3: return dmg * 175 / 100;   // Iron: 1.75x
+                case 4: return dmg * 220 / 100;   // Diamond: 2.2x
+                default: return dmg;
+            }
+        }
+
+        static int scale_weapon_kb(const Fighter& atk, int kb)
+        {
+            switch(atk.weapon_tier)
+            {
+                case 1: return kb * 108 / 100;
+                case 2: return kb * 116 / 100;
+                case 3: return kb * 125 / 100;
+                case 4: return kb * 138 / 100;
+                default: return kb;
+            }
+        }
+
+        void use_weapon_durability(Fighter& atk)
+        {
+            if(atk.weapon_tier > 0 && atk.weapon_dur > 0)
+            {
+                if(--atk.weapon_dur <= 0)
+                {
+                    atk.weapon_tier = 0;
+                    atk.weapon_dur = 0;
+                    spawn_effect(FX_DUST, atk.x16 + atk.facing * 10 * FP, atk.y16 - 14 * FP, 16);
+                }
+            }
+        }
         void update_fighter(int i, const Input& raw)
         {
             Fighter& p = f[i];
@@ -906,9 +1517,159 @@ namespace battle
             Input in = raw;
             if(winner >= 0 || p.state == ST_KO || p.state == ST_GRABBED) { in = Input(); }
             if(p.drop_timer > 0) { --p.drop_timer; }
+            if(p.def_buff_timer > 0 && --p.def_buff_timer == 0) { p.def_buff_amount = 0; }
+            if(p.har_power_timer > 0) { --p.har_power_timer; }
+            if(p.bomb_timer > 0 && --p.bomb_timer == 0)
+            {
+                const int own = (p.bomb_owner >= 0 && p.bomb_owner < MAX_FIGHTERS) ? p.bomb_owner : (team_of(i) == 0 ? 1 : 0);
+                const Shot boom = Shot().of(PROJ_EXPLOSION).dmg(p.bomb_dmg > 0 ? p.bomb_dmg : 14).fly(0, 12).size(42, 34)
+                                        .launch(fp(4.2), fp(-4.2)).stun(24).steal_proof().lingers();
+                spawn_shot_at(own, boom, p.x16, p.y16 - (s.body_h * FP) / 2, 0, false);
+                ev.boom = true;
+                p.bomb_owner = -1;
+                p.bomb_dmg = 0;
+            }
+            if(!net_client && p.is_clone && p.clone_timer > 0 && --p.clone_timer == 0)
+            {
+                if(p.holding >= 0) { release_grab(p.holding); }
+                cancel_move(p);
+                p.hp = 0;
+                p.active = false;
+                p.state = ST_KO;
+                spawn_effect(FX_DUST, p.x16, p.y16 - 12 * FP, 16);
+                return;
+            }
+
+            if(p.on_pig)
+            {
+                if(in.final_smash && s.final_smash_move && p.smash >= SMASH_MAX)
+                {
+                    p.on_pig = false;
+                    p.pig_hp = 0;
+                    p.pig_hits = 0;
+                    p.pig_hit_cd = 0;
+                }
+                else if(in.jump)
+                {
+                    p.on_pig = false;
+                    p.pig_hp = 0;
+                    p.pig_hits = 0;
+                    p.pig_hit_cd = 0;
+                    p.vy = -s.jump_power;
+                    p.on_ground = false;
+                    p.support = -1;
+                    p.state = ST_AIR;
+                    p.jumps_left = s.max_jumps > 1 ? s.max_jumps - 1 : 0;
+                    p.down_hold = 0;
+                    ev.jump = true;
+                    integrate(p, false, false);
+                    return;
+                }
+                else
+                {
+                    if(in.move != 0) { p.facing = in.move; }
+                    const int pig_speed = (in.move == p.facing && in.move != 0) ? fp(3.2) : fp(2.3);
+                    p.vx = approach(p.vx, p.facing * pig_speed, fp(0.5));
+                    p.state = p.on_ground ? ST_WALK : ST_AIR;
+                    integrate(p, in.down, false);
+                    if(p.x16 <= BODY_MARGIN * FP || p.x16 >= (stage.length - BODY_MARGIN) * FP)
+                    {
+                        p.facing = -p.facing;
+                    }
+                    if(p.pig_hit_cd > 0) { --p.pig_hit_cd; }
+                    else
+                    {
+                        const Rect pig_box{ p.x16 / FP, p.y16 / FP - 8, 28, 16 };
+                        for(int v = 0; v < MAX_FIGHTERS; ++v)
+                        {
+                            if(!f[v].active || team_of(v) == team_of(i) || f[v].state == ST_KO) { continue; }
+                            if(overlaps(pig_box, hurtbox_of(f[v])))
+                            {
+                                const int dir = sign_i(f[v].x16 - p.x16) != 0 ? sign_i(f[v].x16 - p.x16) : p.facing;
+                                hit(f[v], 6, fp(3.2), fp(-2.4), 18, dir, f[v].x16, f[v].y16 - 10 * FP, &p);
+                                p.pig_hit_cd = PIG_HIT_CD;
+                                if(++p.pig_hits >= PIG_MAX_HITS)
+                                {
+                                    p.on_pig = false;
+                                    p.pig_hp = 0;
+                                    p.pig_hits = 0;
+                                    p.pig_hit_cd = 0;
+                                    p.vx /= 2;
+                                    p.state = p.on_ground ? ST_IDLE : ST_AIR;
+                                    spawn_effect(FX_DUST, p.x16 - 8 * FP, p.y16 - 8 * FP, 18);
+                                    spawn_effect(FX_DUST, p.x16 + 8 * FP, p.y16 - 10 * FP, 20);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
 
             // ---- states that run by themselves ----
             bool floating = false;                                        // true while an aqua jet is flying
+            if(p.state == ST_ATTACK && p.move && p.move->charges_power)
+            {
+                ++p.move_frame;
+                if(!in.special_held || winner >= 0)
+                {
+                    if(p.move_frame <= 10 && p.move->alt && winner < 0)
+                    {
+                        begin_move(p, p.move->alt, true);
+                        ev.swing = true;
+                        return;
+                    }
+                    p.move = nullptr;
+                    p.move_frame = 0;
+                    p.state = p.on_ground ? ST_IDLE : ST_AIR;
+                }
+                else
+                {
+                    if(p.move_frame >= 10)
+                    {
+                        ++p.har_charge;
+                        if(p.har_charge >= HAR_CHARGE_MAX)
+                        {
+                            p.har_charge = 0;
+                            p.har_power_timer = HAR_POWER_FRAMES;
+                            p.move = nullptr;
+                            p.move_frame = 0;
+                            p.state = p.on_ground ? ST_IDLE : ST_AIR;
+                            spawn_effect(FX_SPARK, p.x16, p.y16 - (s.body_h * FP) / 2, 14);
+                            ev.absorb = true;
+                        }
+                    }
+                    integrate(p, false, false);
+                    return;
+                }
+            }
+
+            if(p.state == ST_ATTACK && p.move && p.move->charges_clone)
+            {
+                if(!in.special_held || winner >= 0)
+                {
+                    p.move = nullptr;
+                    p.move_frame = 0;
+                    p.state = p.on_ground ? ST_IDLE : ST_AIR;
+                }
+                else
+                {
+                    ++p.clone_charge;
+                    p.move_frame = p.clone_charge;
+                    if(p.clone_charge >= CLONE_CHARGE_MAX)
+                    {
+                        p.clone_charge = 0;
+                        p.move = nullptr;
+                        p.move_frame = 0;
+                        p.state = p.on_ground ? ST_IDLE : ST_AIR;
+                        if(!net_client && p.hp > CLONE_HP_COST) { spawn_water_clone(i); }
+                    }
+                    integrate(p, false, false);
+                    return;
+                }
+            }
+
             if(p.state == ST_ATTACK)
             {
                 if(p.move) { floating = run_move(i); }
@@ -931,7 +1692,8 @@ namespace battle
                     p.smash = 0;
                     if(in.move != 0) { p.facing = in.move; }
                     begin_move(p, s.final_smash_move, true);
-                    if(s.final_smash_move->hit_count > 0 || s.final_smash_move->drive.end > s.final_smash_move->drive.start) { ev.swing = true; }
+                    if(s.final_smash_move->hit_count > 0 || s.final_smash_move->drive.end > s.final_smash_move->drive.start || s.final_smash_move->shot_frame >= 0) { ev.swing = true; }
+                    ev.final_smash_start = true;
                     started = true;
                 }
                 else if((in.attack || in.special) && p.state != ST_SHIELD) { started = try_start_move(p, in); }
@@ -950,7 +1712,7 @@ namespace battle
                         p.down_hold = 0;
                         ev.jump = true;
                     }
-                    else if(in.down && p.on_ground && p.support >= 0 && p.state != ST_SHIELD)
+                    else if(in.down && p.on_ground && p.support >= 0 && p.support < stage.platform_count && p.state != ST_SHIELD)
                     {
                         if(++p.down_hold >= DROP_HOLD)                    // DOWN has to be HELD: a quick DOWN + A/B is a down move
                         {
@@ -992,8 +1754,14 @@ namespace battle
             // ---- sideways speed ----
             if(steering)
             {
-                const int target = in.move * s.walk_speed;
+                int wspd = s.walk_speed;
                 int accel = p.on_ground ? s.ground_accel : s.air_accel;
+                if(p.har_power_timer > 0)
+                {
+                    wspd = wspd * 135 / 100;
+                    accel = accel * 135 / 100;
+                }
+                const int target = in.move * wspd;
                 if(target == 0 && p.on_ground) { accel = s.friction; }
                 p.vx = approach(p.vx, target, accel);
             }
@@ -1042,7 +1810,25 @@ namespace battle
             const int slot = pick_slot(in, p);
             const Move* m = s.moves->slot[slot];
             if(!m) { return false; }
-            if(m->alt && p.has_stored) { m = m->alt; }                    // holding a stolen shot: fox thief becomes the throw
+            if(m->charges_clone && p.hp <= CLONE_HP_COST) { return false; }
+            if(slot == SLOT_SPECIAL && s.spawns_crafting_table)
+            {
+                if(!p.on_ground)
+                {
+                    if(p.materials < 1) { return false; }
+                    if(m->alt && m->alt->alt) { m = m->alt->alt; }
+                }
+                else if(on_crafting_table(p) && next_craft_tier(p) > 0)
+                {
+                    if(m->alt) { m = m->alt; }
+                }
+            }
+            else if(m->alt && p.has_stored) { m = m->alt; }
+            else if(slot == SLOT_SPECIAL_DOWN && m->alt && p.har_power_timer > 0)
+            {
+                m = m->alt;
+                p.har_power_timer = 0;
+            }
             if((m->flags & MF_AIR_ONCE) && !p.on_ground && (p.air_used & (1u << slot))) { return false; }
 
             // you turn toward the direction you press, except for aerials: those are "forward" and "back" of where you face
@@ -1077,7 +1863,7 @@ namespace battle
             const int t = p.move_frame;
             bool floating = false;
 
-            const Drive& d = m.drive;
+            const Drive& d = (m.drive2.end > m.drive2.start && t >= m.drive2.start && t < m.drive2.end) ? m.drive2 : m.drive;
             if(d.end > d.start && t >= d.start && t < d.end && !p.drive_cut)
             {
                 p.vx = p.facing * d.vx;
@@ -1113,6 +1899,42 @@ namespace battle
                 p.support = -1;
             }
 
+            if(m.tech_frame >= 0 && t == m.tech_frame)
+            {
+                if(m.mines)
+                {
+                    p.materials += MINE_GAIN;
+                    if(p.materials > MAX_MATERIALS) { p.materials = MAX_MATERIALS; }
+                    ev.mining = true;
+                }
+                if(m.crafts)
+                {
+                    const int tier = next_craft_tier(p);
+                    if(tier > 0)
+                    {
+                        p.materials -= tier_cost(tier);
+                        p.weapon_tier = tier;
+                        p.weapon_dur = tier_durability(tier);
+                        ev.absorb = true;
+                    }
+                }
+                if(m.places_block) { spawn_block(i); ev.mining = true; }
+                if(m.places_tnt)   { spawn_tnt(i); ev.shot = true; }
+                if(m.summons_har_clone && !net_client) { spawn_har_clone(i); }
+                if(m.mounts_pig)
+                {
+                    p.on_pig = true;
+                    p.pig_hp = PIG_MAX_HP;
+                    p.pig_hits = 0;
+                    p.pig_hit_cd = 0;
+                    p.move = nullptr;
+                    p.move_frame = 0;
+                    p.state = p.on_ground ? ST_WALK : ST_AIR;
+                    ev.dash = true;
+                    return false;
+                }
+            }
+
             if(m.shot_frame >= 0 && t == m.shot_frame)
             {
                 if(m.flags & MF_USE_STORED) { if(p.has_stored) { throw_stored(i, m.power); } }
@@ -1125,7 +1947,7 @@ namespace battle
         void advance_move(int i)
         {
             Fighter& p = f[i];
-            if(p.state != ST_ATTACK || !p.move) { return; }
+            if(p.state != ST_ATTACK || !p.move || p.move->charges_clone) { return; }
             if(++p.move_frame >= p.move->duration)
             {
                                 if(p.driving) { p.vx = p.vx * DRIVE_EXIT_PERCENT / 100; p.vy = p.vy * DRIVE_EXIT_PERCENT / 100; }
@@ -1141,21 +1963,70 @@ namespace battle
         {
             const FighterStats& s = *p.stats;
 
-            if(!floating)                                                 // (an aqua jet ignores gravity)
+            if(!floating)
             {
                 p.vy += s.gravity;
                 const int limit = (holding_down && p.state != ST_KO) ? s.fast_fall : s.max_fall;
                 if(p.vy > limit) { p.vy = limit; }
             }
 
+            const int old_x16 = p.x16;
             const int old_y16 = p.y16;
             p.x16 += p.vx;
-            p.y16 += p.vy;
 
             const int min_x = BODY_MARGIN * FP;
             const int max_x = (stage.length - BODY_MARGIN) * FP;
             if(p.x16 < min_x) { p.x16 = min_x; p.vx = 0; }
             if(p.x16 > max_x) { p.x16 = max_x; p.vx = 0; }
+
+            // Solid block horizontal wall collision (blocks enemies & fighters from walking through)
+            const int hw16 = (s.body_w * FP) / 2;
+            const int bh16 = s.body_h * FP;
+            for(int k = 0; k < MAX_BLOCKS; ++k)
+            {
+                const PlacedBlock& bl = blocks[k];
+                if(!bl.active) { continue; }
+                const int bL = bl.x * FP;
+                const int bR = (bl.x + bl.w) * FP;
+                const int bT = bl.y * FP;
+                const int bB = (bl.y + BLOCK_H) * FP;
+                if(old_y16 > bT + FP && old_y16 - bh16 < bB - FP)
+                {
+                    if(p.vx > 0 && old_x16 + hw16 <= bL + 4 * FP && p.x16 + hw16 > bL)
+                    {
+                        p.x16 = bL - hw16;
+                        p.vx = 0;
+                        if(p.on_pig) { p.facing = -1; }
+                    }
+                    else if(p.vx < 0 && old_x16 - hw16 >= bR - 4 * FP && p.x16 - hw16 < bR)
+                    {
+                        p.x16 = bR + hw16;
+                        p.vx = 0;
+                        if(p.on_pig) { p.facing = 1; }
+                    }
+                }
+            }
+
+            p.y16 += p.vy;
+
+            // Solid block ceiling headbonk
+            if(p.vy < 0)
+            {
+                for(int k = 0; k < MAX_BLOCKS; ++k)
+                {
+                    const PlacedBlock& bl = blocks[k];
+                    if(!bl.active) { continue; }
+                    const int bL = bl.x * FP;
+                    const int bR = (bl.x + bl.w) * FP;
+                    const int bB = (bl.y + BLOCK_H) * FP;
+                    if(p.x16 + hw16 > bL + FP && p.x16 - hw16 < bR - FP &&
+                       old_y16 - bh16 >= bB - 4 * FP && p.y16 - bh16 < bB)
+                    {
+                        p.y16 = bB + bh16;
+                        p.vy = 0;
+                    }
+                }
+            }
 
             bool landed = false;
             int support = -1;
@@ -1180,6 +2051,23 @@ namespace battle
                     }
                 }
 
+                // Solid blocks always support feet on top (cannot drop through)
+                for(int k = 0; k < MAX_BLOCKS; ++k)
+                {
+                    const PlacedBlock& bl = blocks[k];
+                    if(!bl.active) { continue; }
+                    const int bL = bl.x * FP;
+                    const int bR = (bl.x + bl.w) * FP;
+                    const int top16 = bl.y * FP;
+                    if(p.x16 + hw16 > bL + FP && p.x16 - hw16 < bR - FP &&
+                       old_y16 <= top16 + 4 * FP && p.y16 >= top16 && (!landed || top16 < best_y16))
+                    {
+                        landed = true;
+                        best_y16 = top16;
+                        support = 100 + k;
+                    }
+                }
+
                 if(landed)
                 {
                     p.y16 = best_y16;
@@ -1192,20 +2080,431 @@ namespace battle
             if(landed) { p.jumps_left = s.max_jumps; p.air_used = 0; }
         }
 
+        void spawn_water_clone(int owner)
+        {
+            const int team = team_of(owner);
+            const int slot = (team == 0) ? 3 : 4;
+            int src = foe_of(owner);
+            if(f[src].is_clone && f[src].clone_of >= 0) { src = f[src].clone_of; }
+            if(!f[src].active || !f[src].stats) { return; }
+
+            FighterStats& cs = clone_stats[team];
+            cs = *f[src].stats;
+            cs.max_hp = cs.max_hp / 10;
+            if(cs.max_hp < 1) { cs.max_hp = 1; }
+            cs.phys_pct = cs.phys_pct / 2;
+            cs.magic_pct = cs.magic_pct / 2;
+            cs.final_smash_move = nullptr;
+            cs.spawns_crafting_table = false;
+
+            Fighter& op = f[owner];
+            if(op.hp <= CLONE_HP_COST) { return; }
+            op.hp -= CLONE_HP_COST;
+            int cx = op.x16 / FP + op.facing * 24;
+            if(cx < BODY_MARGIN) { cx = BODY_MARGIN; }
+            if(cx > stage.length - BODY_MARGIN) { cx = stage.length - BODY_MARGIN; }
+
+            f[slot] = Fighter();
+            f[slot].active = true;
+            f[slot].is_clone = true;
+            f[slot].clone_of = src;
+            f[slot].stats = &cs;
+            f[slot].x16 = cx * FP;
+            f[slot].y16 = op.y16;
+            f[slot].facing = op.facing;
+            f[slot].hp = cs.max_hp;
+            f[slot].clone_timer = CLONE_LIFE_FRAMES;
+            f[slot].jumps_left = cs.max_jumps;
+            f[slot].on_ground = op.on_ground;
+            f[slot].state = op.on_ground ? ST_IDLE : ST_AIR;
+            ai[slot] = Ai();
+
+            spawn_effect(FX_SPARK, f[slot].x16, f[slot].y16 - 14 * FP, 12);
+            ev.absorb = true;
+            ev.dash = true;
+        }
+
+    public:
+        void spawn_water_clone_from_net(int slot, int src, int facing, int hp)
+        {
+            if(slot < 3 || slot >= MAX_FIGHTERS || src < 0 || src >= 3 || !f[src].active || !f[src].stats) { return; }
+            const int team = team_of(slot);
+            FighterStats& cs = clone_stats[team];
+            cs = *f[src].stats;
+            cs.max_hp = cs.max_hp / 10;
+            if(cs.max_hp < 1) { cs.max_hp = 1; }
+            cs.phys_pct = cs.phys_pct / 2;
+            cs.magic_pct = cs.magic_pct / 2;
+            cs.final_smash_move = nullptr;
+            cs.spawns_crafting_table = false;
+
+            const int owner = (team == 0) ? 0 : 1;
+            const Fighter& op = f[owner];
+            int cx = op.x16 / FP + facing * 24;
+            if(cx < BODY_MARGIN) { cx = BODY_MARGIN; }
+            if(cx > stage.length - BODY_MARGIN) { cx = stage.length - BODY_MARGIN; }
+
+            f[slot] = Fighter();
+            f[slot].active = true;
+            f[slot].is_clone = true;
+            f[slot].clone_of = src;
+            f[slot].stats = &cs;
+            f[slot].x16 = cx * FP;
+            f[slot].y16 = op.y16;
+            f[slot].facing = facing;
+            f[slot].hp = (hp > 0 && hp <= cs.max_hp) ? hp : cs.max_hp;
+            f[slot].clone_timer = CLONE_LIFE_FRAMES;
+            f[slot].jumps_left = cs.max_jumps;
+            f[slot].on_ground = op.on_ground;
+            f[slot].state = op.on_ground ? ST_IDLE : ST_AIR;
+            ai[slot] = Ai();
+
+            spawn_effect(FX_SPARK, f[slot].x16, f[slot].y16 - 14 * FP, 12);
+            ev.absorb = true;
+            ev.dash = true;
+        }
+
+        void spawn_har_clone(int owner)
+        {
+            const int team = team_of(owner);
+            const int slot = (team == 0) ? 3 : 4;
+            const bool use_waffle = (waffle_ref_stats != nullptr) && (random_below(2) == 0);
+            const FighterStats* base_s = use_waffle ? waffle_ref_stats : f[owner].stats;
+            if(!base_s) { return; }
+
+            FighterStats& cs = clone_stats[team];
+            cs = *base_s;
+            cs.max_hp = cs.max_hp / 10;
+            if(cs.max_hp < 1) { cs.max_hp = 1; }
+            cs.phys_pct = cs.phys_pct / 2;
+            cs.magic_pct = cs.magic_pct / 2;
+            cs.final_smash_move = nullptr;
+            cs.spawns_crafting_table = false;
+
+            const Fighter& op = f[owner];
+            int cx = op.x16 / FP + op.facing * 24;
+            if(cx < BODY_MARGIN) { cx = BODY_MARGIN; }
+            if(cx > stage.length - BODY_MARGIN) { cx = stage.length - BODY_MARGIN; }
+
+            f[slot] = Fighter();
+            f[slot].active = true;
+            f[slot].is_clone = true;
+            f[slot].clone_of = use_waffle ? 100 : owner;
+            f[slot].stats = &cs;
+            f[slot].x16 = cx * FP;
+            f[slot].y16 = op.y16;
+            f[slot].facing = op.facing;
+            f[slot].hp = cs.max_hp;
+            f[slot].clone_timer = CLONE_LIFE_FRAMES;
+            f[slot].jumps_left = cs.max_jumps;
+            f[slot].on_ground = op.on_ground;
+            f[slot].state = op.on_ground ? ST_IDLE : ST_AIR;
+            ai[slot] = Ai();
+
+            spawn_effect(FX_SPARK, f[slot].x16, f[slot].y16 - 14 * FP, 12);
+            ev.absorb = true;
+            ev.dash = true;
+        }
+
+        void begin_in_stage_fs(int atk_idx, int vic_idx)
+        {
+            fs_combo_active = true;
+            fs_combo_tick = 0;
+            fs_combo_atk = atk_idx;
+            fs_combo_vic = vic_idx;
+            fs_combo_clone = (team_of(atk_idx) == 0) ? 3 : 4;
+
+            Fighter& atk = f[atk_idx];
+            Fighter& vic = f[vic_idx];
+            const int mid = stage.length / 2;
+            if(atk.x16 / FP <= mid)
+            {
+                fs_combo_home_x = (mid - 96 >= 28) ? (mid - 96) : 28;
+            }
+            else
+            {
+                fs_combo_home_x = (mid + 96 <= stage.length - 28) ? (mid + 96) : (stage.length - 28);
+            }
+
+            cancel_move(atk);
+            cancel_move(vic);
+            atk.vx = 0; atk.vy = 0;
+            atk.x16 = fs_combo_home_x * FP;
+            atk.y16 = stage.ground_y * FP;
+            atk.on_ground = true;
+            atk.facing = (fs_combo_home_x < mid) ? 1 : -1;
+            atk.state = ST_IDLE;
+
+            vic.vx = 0; vic.vy = 0;
+            vic.on_ground = false;
+            vic.support = -1;
+            vic.state = ST_GRABBED;
+            vic.x16 = mid * FP;
+            vic.y16 = (stage.ground_y - 44) * FP;
+
+            f[fs_combo_clone] = Fighter();
+            f[fs_combo_clone].active = false;
+            ev.absorb = true;
+        }
+
+        void step_harue_fs()
+        {
+            ++fs_combo_tick;
+            const int t = fs_combo_tick;
+            Fighter& atk = f[fs_combo_atk];
+            Fighter& cl  = f[fs_combo_clone];
+            Fighter& vic = f[fs_combo_vic];
+            const int mid = stage.length / 2;
+            const int mid_x16 = mid * FP;
+            const int air_y16 = (stage.ground_y - 44) * FP;
+            const Move* chg_m = atk.stats->moves ? atk.stats->moves->slot[SLOT_SPECIAL] : nullptr;
+            const Move* fs_m  = atk.stats->final_smash_move;
+            const Move* ud_m  = atk.stats->moves ? atk.stats->moves->slot[SLOT_SPECIAL_UP] : nullptr;
+
+            if(t <= 100)
+            {
+                vic.x16 = mid_x16;
+                vic.y16 = air_y16 + ((t % 16 < 8) ? -FP : FP);
+                vic.state = ST_GRABBED;
+
+                if(t < 65)
+                {
+                    atk.state = ST_IDLE;
+                    atk.move = nullptr;
+                }
+                else if(t < 75)
+                {
+                    atk.state = ST_ATTACK;
+                    atk.move = chg_m;
+                    atk.move_frame = 10 + (t - 65);
+                }
+                else if(t == 75)
+                {
+                    const Shot boom = Shot().of(PROJ_EXPLOSION).dmg(0).fly(0, 14).size(48, 38)
+                                            .steal_proof().lingers();
+                    spawn_shot_at(fs_combo_atk, boom, atk.x16, atk.y16 - 14 * FP, 0, false);
+                    ev.boom = true;
+                    ev.absorb = true;
+
+                    cl = Fighter();
+                    cl.active = true;
+                    cl.is_clone = true;
+                    cl.clone_of = fs_combo_atk;
+                    cl.stats = atk.stats;
+                    cl.hp = 999;
+                    const int sep = (fs_combo_home_x < mid) ? 20 * FP : -20 * FP;
+                    cl.x16 = atk.x16 + sep;
+                    cl.y16 = atk.y16;
+                    cl.facing = atk.facing;
+                    cl.state = ST_IDLE;
+                    atk.state = ST_IDLE;
+                    atk.move = nullptr;
+                }
+                else
+                {
+                    atk.state = ST_IDLE;
+                    cl.state = ST_IDLE;
+                }
+            }
+            else if(t <= 208)
+            {
+                const int k = (t - 101) / 18;
+                const int sub = (t - 101) % 18;
+                const bool left_hit = (k % 2 == 0);
+                const int span = (mid - 44 >= 36) ? 44 : (mid - 32);
+                const int lx16 = (mid - span) * FP;
+                const int rx16 = (mid + span) * FP;
+
+                atk.x16 = lx16 - 16 * FP; atk.y16 = air_y16; atk.facing = 1;
+                cl.x16  = rx16 + 16 * FP; cl.y16  = air_y16; cl.facing = -1;
+
+                if(sub < 5)
+                {
+                    vic.x16 = left_hit ? lx16 : rx16;
+                }
+                else
+                {
+                    const int frac = sub - 5;
+                    vic.x16 = left_hit ? (lx16 + (rx16 - lx16) * frac / 12)
+                                       : (rx16 - (rx16 - lx16) * frac / 12);
+                }
+                vic.y16 = air_y16 - ((sub >= 5 && sub <= 13) ? 6 * FP : 0);
+                vic.state = ST_GRABBED;
+
+                if(left_hit)
+                {
+                    atk.state = ST_ATTACK; atk.move = fs_m; atk.move_frame = sub;
+                    cl.state = ST_IDLE; cl.move = nullptr;
+                }
+                else
+                {
+                    cl.state = ST_ATTACK; cl.move = fs_m; cl.move_frame = sub;
+                    atk.state = ST_IDLE; atk.move = nullptr;
+                }
+
+                if(sub == 5)
+                {
+                    ev.swing = true;
+                    ev.hit = true;
+                    if(vic.hp > 5) { vic.hp -= 5; }
+                    else if(vic.hp > 1) { vic.hp = 1; }
+                    spawn_effect(FX_SPARK, vic.x16, vic.y16 - 14 * FP, 10);
+                }
+            }
+            else if(t <= 232)
+            {
+                if(t < 217)
+                {
+                    const int dt = t - 209;
+                    const int span = (mid - 44 >= 36) ? 44 : (mid - 32);
+                    vic.x16 = (mid - span) * FP + (span * FP * dt / 8);
+                    vic.y16 = air_y16;
+                    vic.state = ST_GRABBED;
+                    atk.x16 = mid_x16 - 16 * FP; atk.y16 = (stage.ground_y - 74) * FP; atk.facing = 1;
+                    cl.x16  = mid_x16 + 16 * FP; cl.y16  = (stage.ground_y - 74) * FP; cl.facing = -1;
+                    atk.state = ST_AIR; atk.move = nullptr;
+                    cl.state  = ST_AIR; cl.move  = nullptr;
+                }
+                else
+                {
+                    const int dt = t - 217;
+                    const int drop_y16 = (stage.ground_y - 74) * FP + dt * 74 * FP / 15;
+                    vic.x16 = mid_x16; vic.y16 = air_y16; vic.state = ST_GRABBED;
+                    atk.x16 = mid_x16 - 16 * FP; atk.y16 = drop_y16; atk.facing = 1;
+                    cl.x16  = mid_x16 + 16 * FP; cl.y16  = drop_y16; cl.facing = -1;
+                    atk.state = ST_ATTACK; atk.move = ud_m; atk.move_frame = 24 + dt;
+                    cl.state  = ST_ATTACK; cl.move  = ud_m; cl.move_frame  = 24 + dt;
+                    if(t == 217) { ev.swing = true; }
+                    if(t == 232)
+                    {
+                        vic.state = ST_HURT;
+                        hit(vic, 26, fp(7.5), fp(-6.5), 42, 1, vic.x16, vic.y16 - 14 * FP, nullptr);
+                        const Shot boom = Shot().of(PROJ_EXPLOSION).dmg(0).fly(0, 14).size(56, 44)
+                                                .steal_proof().lingers();
+                        spawn_shot_at(fs_combo_atk, boom, vic.x16, vic.y16 - 14 * FP, 0, false);
+                        ev.boom = true;
+                        ev.hitsmash = true;
+                        if(vic.hp <= 0 && winner < 0 && fs_combo_vic < 2)
+                        {
+                            winner = team_of(fs_combo_atk) == 0 ? 0 : 1;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                integrate(vic, false, false);
+                integrate(atk, false, false);
+                if(t == 256)
+                {
+                    spawn_effect(FX_DUST, cl.x16, cl.y16 - 14 * FP, 16);
+                    cl.active = false;
+                    cl.hp = 0;
+                    cancel_move(atk);
+                    atk.state = atk.on_ground ? ST_IDLE : ST_AIR;
+                    fs_combo_active = false;
+                    fs_combo_tick = 0;
+                }
+            }
+            for(Projectile& pr : proj) { if(pr.active && pr.shot.kind == PROJ_EXPLOSION && --pr.life <= 0) { pr.active = false; } }
+            for(Effect& e : fx) { if(e.active && ++e.age >= e.life) { e.active = false; } }
+            ++frame;
+        }
+
+        // ---------------------------------------------------------------------------- blocks & TNT
+
+        void spawn_block(int owner)
+        {
+            Fighter& p = f[owner];
+            if(p.materials < 1) { return; }
+            --p.materials;
+
+            int slot = 0;
+            for(int k = 0; k < MAX_BLOCKS; ++k)
+            {
+                if(!blocks[k].active) { slot = k; break; }
+                if(blocks[k].id < blocks[slot].id) { slot = k; }
+            }
+            int bx = p.x16 / FP - BLOCK_W / 2;
+            if(bx < BODY_MARGIN) { bx = BODY_MARGIN; }
+            if(bx > stage.length - BODY_MARGIN - BLOCK_W) { bx = stage.length - BODY_MARGIN - BLOCK_W; }
+            int by = p.y16 / FP;
+            if(by < 36) { by = 36; }
+            if(by > stage.ground_y - BLOCK_H) { by = stage.ground_y - BLOCK_H; }
+
+            blocks[slot] = PlacedBlock{ true, next_block_id++, owner, bx, by, BLOCK_W, BLOCK_LIFE, BLOCK_HP };
+            p.y16 = by * FP;
+            p.vy = 0;
+            p.on_ground = true;
+            p.support = 100 + slot;
+        }
+
+        void update_blocks()
+        {
+            for(PlacedBlock& b : blocks)
+            {
+                if(b.active && --b.life <= 0) { b.active = false; }
+            }
+        }
+
+        void spawn_tnt(int owner)
+        {
+            int tnt_count = 0;
+            int oldest_idx = -1;
+            for(int k = 0; k < MAX_PROJECTILES; ++k)
+            {
+                if(proj[k].active && proj[k].shot.kind == PROJ_TNT)
+                {
+                    ++tnt_count;
+                    if(oldest_idx < 0 || proj[k].id < proj[oldest_idx].id) { oldest_idx = k; }
+                }
+            }
+            if(tnt_count >= MAX_TNT && oldest_idx >= 0) { proj[oldest_idx].active = false; }
+
+            const Shot tnt = Shot().of(PROJ_TNT).dmg(16).fly(0, TNT_LIFE).size(18, 18)
+                                   .spawn(8, 8).launch(fp(4.5), fp(-4.5)).stun(24).hurts_everyone();
+            spawn_shot(owner, tnt, false);
+        }
+
+        void detonate_tnt_proj(Projectile& pr)
+        {
+            const int owner = pr.owner;
+            const int x16 = pr.x16;
+            const int y16 = pr.y16;
+            pr.active = false;
+            const Shot boom = Shot().of(PROJ_EXPLOSION).dmg(16).fly(0, 12).size(48, 38)
+                                    .launch(fp(4.5), fp(-4.5)).stun(24).steal_proof().lingers().hurts_everyone();
+            spawn_shot_at(owner, boom, x16, y16, 0, false);
+            ev.boom = true;
+        }
+
         // ---------------------------------------------------------------------------- shots
 
-        // Puts a shot into the world, in front of the fighter who fires it.
-        // (the owner's damage buff is applied here, except for a shot that was stolen: that one was buffed already)
+        // ---------------------------------------------------------------------------- shots
+
         void spawn_shot(int owner, const Shot& shot, bool apply_buff = true)
         {
             Fighter& p = f[owner];
-            spawn_shot_at(owner, shot, p.x16 + p.facing * shot.dx * FP, p.y16 - shot.dy * FP, p.facing * shot.speed, apply_buff);
+            if(shot.spread > 0)
+            {
+                spawn_shot_at(owner, shot, p.x16, p.y16 - shot.dy * FP, -shot.spread, apply_buff, shot.vy);
+                spawn_shot_at(owner, shot, p.x16, p.y16 - shot.dy * FP, 0, apply_buff, shot.vy - fp(0.4));
+                spawn_shot_at(owner, shot, p.x16, p.y16 - shot.dy * FP, shot.spread, apply_buff, shot.vy);
+                return;
+            }
+            spawn_shot_at(owner, shot, p.x16 + p.facing * shot.dx * FP, p.y16 - shot.dy * FP, p.facing * shot.speed, apply_buff, shot.vy);
         }
 
-        void spawn_shot_at(int owner, const Shot& shot, int x16, int y16, int vx, bool apply_buff = true)
+        void spawn_shot_at(int owner, const Shot& shot, int x16, int y16, int vx, bool apply_buff = true, int vy_override = 0)
         {
             Fighter& p = f[owner];
             Shot sh = shot;
+            if(sh.weapon_scaled)
+            {
+                sh.damage = scale_weapon_dmg(p, sh.damage);
+                sh.kb_x = scale_weapon_kb(p, sh.kb_x);
+                sh.kb_y = scale_weapon_kb(p, sh.kb_y);
+            }
             if(apply_buff) { sh.damage = buffed_damage(p, sh.damage); }
             for(Projectile& pr : proj)
             {
@@ -1217,14 +2516,14 @@ namespace battle
                 pr.x16 = x16;
                 pr.y16 = y16;
                 pr.vx = vx;
-                pr.vy = sh.vy;
+                pr.vy = (vy_override != 0) ? vy_override : sh.vy;
                 pr.life = sh.life;
+                pr.boom_dir = (vx != 0) ? sign_i(vx) : p.facing;
                 pr.shot = sh;
                 return;
             }
         }
 
-        // a laptop (or anything with boom > 0) blows up where it hit
         void spawn_boom(int owner, int x16, int y16, int damage)
         {
             const Shot boom = Shot().of(PROJ_EXPLOSION).dmg(damage).fly(0, 10).size(40, 30)
@@ -1233,14 +2532,28 @@ namespace battle
             ev.boom = true;
         }
 
-        // fox thief, second press: send the stolen shot back (a bit stronger and faster)
         void throw_stored(int i, int power)
         {
             Fighter& p = f[i];
             Shot sh = p.stored;
-            sh.speed = sh.speed * power / 100;
-            sh.damage = sh.damage * power / 100;
-            if(sh.damage < 1) { sh.damage = 1; }
+            if(sh.kind == PROJ_TNT)
+            {
+                sh.speed = fp(3.0) * power / 100;
+                sh.vy = -fp(2.4);
+                sh.grav = 3;
+                sh.life = 90;
+                sh.dx = 12;
+                sh.dy = 16;
+                sh.boom = sh.damage * power / 100;
+                sh.damage = 4;
+                sh.friendly_fire = false;
+            }
+            else
+            {
+                sh.speed = sh.speed * power / 100;
+                sh.damage = sh.damage * power / 100;
+                if(sh.damage < 1) { sh.damage = 1; }
+            }
             spawn_shot(i, sh, false);
             p.has_stored = false;
             ev.shot = true;
@@ -1248,13 +2561,129 @@ namespace battle
 
         void update_projectiles()
         {
-            
             for(Projectile& pr : proj)
             {
                 if(!pr.active) { continue; }
 
+                // Placed TNT sits in proj[] so Fox Thief / Counter can steal it!
+                if(pr.shot.kind == PROJ_TNT && pr.vx == 0)
+                {
+                    const int old_bot16 = pr.y16 + 8 * FP;
+                    pr.vy += 6;
+                    if(pr.vy > fp(4.0)) { pr.vy = fp(4.0); }
+                    pr.y16 += pr.vy;
+
+                    int best_y16 = stage.ground_y * FP;
+                    bool landed = (pr.y16 + 8 * FP) >= best_y16;
+                    const int tx = pr.x16 / FP;
+                    for(int k = 0; k < stage.platform_count; ++k)
+                    {
+                        const Platform& pl = stage.platforms[k];
+                        const int top16 = pl.y * FP;
+                        if(tx >= pl.x && tx <= pl.x + pl.w && old_bot16 <= top16 + 4 * FP &&
+                           (pr.y16 + 8 * FP) >= top16 && (!landed || top16 < best_y16))
+                        {
+                            landed = true;
+                            best_y16 = top16;
+                        }
+                    }
+                    for(int k = 0; k < MAX_BLOCKS; ++k)
+                    {
+                        const PlacedBlock& bl = blocks[k];
+                        if(!bl.active) { continue; }
+                        const int top16 = bl.y * FP;
+                        if(tx >= bl.x && tx <= bl.x + bl.w && old_bot16 <= top16 + 4 * FP &&
+                           (pr.y16 + 8 * FP) >= top16 && (!landed || top16 < best_y16))
+                        {
+                            landed = true;
+                            best_y16 = top16;
+                        }
+                    }
+                    if(landed) { pr.y16 = best_y16 - 8 * FP; pr.vy = 0; }
+
+                    ++pr.age;
+                    if(--pr.life <= 0) { pr.active = false; continue; }
+
+                    const Rect tbox{ pr.x16 / FP, pr.y16 / FP, pr.shot.w, pr.shot.h };
+
+                    // Check Fox Thief / Counter absorb BEFORE touch detonation!
+                    bool stolen = false;
+                    for(int ti = 0; ti < MAX_FIGHTERS; ++ti)
+                    {
+                        if(!f[ti].active || team_of(ti) == team_of(pr.owner) || f[ti].state == ST_KO) { continue; }
+                        Fighter& target = f[ti];
+                        const Move* tm = target.move;
+                        if(!target.has_stored && target.state == ST_ATTACK && tm && tm->absorb_end > tm->absorb_start &&
+                           target.move_frame >= tm->absorb_start && target.move_frame < tm->absorb_end)
+                        {
+                            Rect catch_zone = hurtbox_of(target);
+                            catch_zone.w += (ABSORB_MARGIN + 4) * 2;
+                            catch_zone.h += (ABSORB_MARGIN + 4) * 2;
+                            if(overlaps(tbox, catch_zone))
+                            {
+                                target.has_stored = true;
+                                target.stored = pr.shot;
+                                pr.active = false;
+                                ev.absorb = true;
+                                if(tm->on_absorb) { begin_move(target, tm->on_absorb, target.move_magic); }
+                                stolen = true;
+                                break;
+                            }
+                        }
+                    }
+                    if(stolen) { continue; }
+
+                    if(pr.age >= TNT_ARM_FRAMES)
+                    {
+                        bool touched = false;
+                        for(int i = 0; i < MAX_FIGHTERS; ++i)
+                        {
+                            if(!f[i].active || i == pr.owner || f[i].state == ST_KO) { continue; }
+                            if(overlaps(tbox, hurtbox_of(f[i]))) { touched = true; break; }
+                        }
+                        if(!touched)
+                        {
+                            for(Projectile& other : proj)
+                            {
+                                if(!other.active || &other == &pr || other.shot.kind == PROJ_EXPLOSION || other.shot.kind == PROJ_TNT) { continue; }
+                                if(overlaps(tbox, Rect{ other.x16 / FP, other.y16 / FP, other.shot.w, other.shot.h }))
+                                {
+                                    if(!other.shot.persist) { other.active = false; }
+                                    touched = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if(touched) { detonate_tnt_proj(pr); }
+                    }
+                    continue;
+                }
+
+                if(pr.shot.boom_accel > 0)
+                {
+                    const int prev_vx = pr.vx;
+                    pr.vx -= pr.boom_dir * pr.shot.boom_accel;
+                    if(!pr.boom_flipped && ((prev_vx > 0 && pr.vx <= 0) || (prev_vx < 0 && pr.vx >= 0)))
+                    {
+                        pr.boom_flipped = true;
+                        pr.hit_done = false;
+                    }
+                    if(pr.boom_flipped)
+                    {
+                        const Fighter& ow = f[pr.owner];
+                        const int target_y16 = ow.y16 - (ow.stats->body_h * FP) / 2;
+                        if(pr.y16 < target_y16 - 2 * FP)      { pr.y16 += FP; }
+                        else if(pr.y16 > target_y16 + 2 * FP) { pr.y16 -= FP; }
+                        if(overlaps(Rect{ pr.x16 / FP, pr.y16 / FP, pr.shot.w, pr.shot.h }, hurtbox_of(ow)))
+                        {
+                            pr.active = false;
+                            continue;
+                        }
+                    }
+                }
+
                 pr.x16 += pr.vx;
-                if(pr.shot.grav != 0 || pr.vy != 0)                       // thrown objects fly in an arc
+                if(pr.shot.grav != 0 || pr.vy != 0)
                 {
                     pr.vy += pr.shot.grav;
                     pr.y16 += pr.vy;
@@ -1262,26 +2691,89 @@ namespace battle
                 ++pr.age;
                 if(--pr.life <= 0 || pr.x16 < -32 * FP || pr.x16 > (stage.length + 32) * FP) { pr.active = false; continue; }
 
-                if(pr.shot.grav != 0 && pr.vy > 0 && pr.y16 >= stage.ground_y * FP)   // an arc that came down onto the floor
+                if(pr.shot.grav != 0 && pr.vy > 0 && pr.y16 >= stage.ground_y * FP)
                 {
                     pr.active = false;
                     if(pr.shot.boom > 0) { spawn_boom(pr.owner, pr.x16, stage.ground_y * FP - 8 * FP, pr.shot.boom); }
                     continue;
                 }
 
+                if(pr.hit_done) { continue; }
+
                 const Shot& sh = pr.shot;
                 const Rect box{ pr.x16 / FP, pr.y16 / FP, sh.w, sh.h };
 
-                // a shot hits the first fighter of the OTHER team that it touches (never its own side)
-                for(int ti = 0; ti < count && pr.active && !pr.hit_done; ++ti)
+                if(sh.final_smash == FS_NONE && sh.kind != PROJ_EXPLOSION)
                 {
-                    if(team_of(ti) == team_of(pr.owner) || f[ti].state == ST_KO) { continue; }
+                    bool hit_wall = false;
+                    for(int bk = 0; bk < MAX_BLOCKS; ++bk)
+                    {
+                        PlacedBlock& bl = blocks[bk];
+                        if(!bl.active) { continue; }
+                        const Rect bl_box{ bl.x + bl.w / 2, bl.y + BLOCK_H / 2, bl.w, BLOCK_H };
+                        if(overlaps(box, bl_box))
+                        {
+                            if(sh.boom > 0) { spawn_boom(pr.owner, pr.x16, pr.y16, sh.boom); }
+                            bl.hp -= sh.damage > 1 ? sh.damage : 1;
+                            spawn_effect(bl.hp <= 0 ? FX_DUST : FX_SPARK, pr.x16, pr.y16, 10);
+                            if(bl.hp <= 0) { bl.active = false; }
+                            if(sh.boom_accel > 0 && !pr.boom_flipped)
+                            {
+                                pr.vx = -pr.vx;
+                                pr.boom_flipped = true;
+                            }
+                            else { pr.active = false; }
+                            hit_wall = true;
+                            break;
+                        }
+                    }
+                    if(hit_wall) { continue; }
+                }
+
+                bool hit_any = false;
+                for(int ti = 0; ti < MAX_FIGHTERS && pr.active; ++ti)
+                {
+                    if(!f[ti].active || f[ti].state == ST_KO) { continue; }
+                    const bool same_team = (team_of(ti) == team_of(pr.owner));
+                    if(same_team && ti != pr.owner && sh.heal_ally > 0)
+                    {
+                        if(overlaps(box, hurtbox_of(f[ti])))
+                        {
+                            f[ti].hp += sh.heal_ally;
+                            if(f[ti].hp > f[ti].stats->max_hp) { f[ti].hp = f[ti].stats->max_hp; }
+                            spawn_effect(FX_SPARK, pr.x16, pr.y16, 10);
+                            ev.absorb = true;
+                            pr.active = false;
+                            break;
+                        }
+                    }
+                    if(!sh.friendly_fire && same_team) { continue; }
 
                     Fighter& target = f[ti];
                     Rect body = hurtbox_of(target);
 
-                    // fox thief: while the stance is up, a shot that comes close is stolen instead of hurting
                     const Move* tm = target.move;
+                    if(sh.absorbable && sh.kind != PROJ_EXPLOSION && sh.final_smash == FS_NONE &&
+                       target.state == ST_ATTACK && tm && tm->reflect_end > tm->reflect_start &&
+                       target.move_frame >= tm->reflect_start && target.move_frame < tm->reflect_end)
+                    {
+                        Rect ref_zone = body;
+                        ref_zone.w += ABSORB_MARGIN * 2;
+                        ref_zone.h += ABSORB_MARGIN * 2;
+                        if(overlaps(box, ref_zone))
+                        {
+                            pr.owner = ti;
+                            pr.vx = (pr.vx != 0) ? -pr.vx : (target.facing * fp(3.5));
+                            if(pr.vy > 0) { pr.vy = -pr.vy / 2; }
+                            pr.shot.damage = pr.shot.damage * 150 / 100;
+                            pr.life = sh.life;
+                            pr.hit_done = false;
+                            spawn_effect(FX_SPARK, pr.x16, pr.y16, 10);
+                            ev.absorb = true;
+                            break;
+                        }
+                    }
+
                     if(sh.absorbable && !target.has_stored && target.state == ST_ATTACK && tm && tm->absorb_end > tm->absorb_start &&
                        target.move_frame >= tm->absorb_start && target.move_frame < tm->absorb_end)
                     {
@@ -1294,7 +2786,7 @@ namespace battle
                             target.stored = sh;
                             pr.active = false;
                             ev.absorb = true;
-                            if(tm->on_absorb) { begin_move(target, tm->on_absorb, target.move_magic); }   // (Filip: spin and throw it back at once)
+                            if(tm->on_absorb) { begin_move(target, tm->on_absorb, target.move_magic); }
                             break;
                         }
                     }
@@ -1304,11 +2796,34 @@ namespace battle
                         int dir = sign_i(pr.vx);
                         if(dir == 0) { dir = sign_i(target.x16 - pr.x16); }
                         if(dir == 0) { dir = f[pr.owner].facing; }
-                        hit(target, sh.damage, sh.kb_x, sh.kb_y, sh.hitstun, dir, pr.x16, pr.y16, &f[pr.owner]);
+
+                        if(sh.final_smash != FS_NONE)
+                        {
+                            if(target.state == ST_SHIELD) { target.state = ST_IDLE; }
+                            target.on_pig = false;
+                            target.pig_hp = 0;
+                            int applied = sh.damage;
+                            if(target.hp <= applied) { applied = target.hp > 1 ? target.hp - 1 : 0; }
+                            hit(target, applied, sh.kb_x, sh.kb_y, sh.hitstun, dir, pr.x16, pr.y16, nullptr);
+                            pr.active = false;
+                            if(pending_final_smash < 0)
+                            {
+                                pending_final_smash = pr.owner;
+                                pending_final_smash_victim = ti;
+                                pending_final_smash_id = sh.final_smash;
+                            }
+                            return;
+                        }
+
+                        hit(target, sh.damage, sh.kb_x, sh.kb_y, sh.hitstun, dir, pr.x16, pr.y16,
+                            sh.friendly_fire ? nullptr : &f[pr.owner]);
+                        if(sh.weapon_scaled) { use_weapon_durability(f[pr.owner]); }
                         if(sh.boom > 0) { spawn_boom(pr.owner, pr.x16, pr.y16, sh.boom); }
-                        if(sh.persist) { pr.hit_done = true; } else { pr.active = false; }
+                        hit_any = true;
+                        if(!sh.persist) { pr.active = false; break; }
                     }
                 }
+                if(hit_any && sh.persist) { pr.hit_done = true; }
             }
         }
 
@@ -1318,33 +2833,34 @@ namespace battle
         // applied afterwards, so two fighters that hit each other on the same frame BOTH get hit (a trade).
         void resolve_melee()
         {
-            PendingHit pending[3 * MAX_HITBOXES * 2];
+            PendingHit pending[MAX_FIGHTERS * MAX_HITBOXES * 2];
             int pending_count = 0;
 
-            for(int a = 0; a < count; ++a)
+            for(int a = 0; a < MAX_FIGHTERS; ++a)
             {
                 const Fighter& p = f[a];
-                if(p.state != ST_ATTACK || !p.move) { continue; }
+                if(!p.active || p.state != ST_ATTACK || !p.move) { continue; }
 
-                for(int v = 0; v < count; ++v)
+                for(int v = 0; v < MAX_FIGHTERS; ++v)
                 {
                     const Fighter& t = f[v];
-                    if(team_of(v) == team_of(a) || t.state == ST_KO) { continue; }
+                    if(!t.active || a == v || t.state == ST_KO) { continue; }
+                    const bool same_team = (team_of(v) == team_of(a));
 
                     const Rect body = hurtbox_of(t);
                     for(int k = 0; k < p.move->hit_count; ++k)
                     {
+                        const Hitbox& h = p.move->hits[k];
+                        if(same_team && !h.hits_ally) { continue; }
                         Rect box;
                         if(!hitbox_now(a, k, box) || (p.hit_done & (1u << k)) || !overlaps(box, body)) { continue; }
 
-                        const Hitbox& h = p.move->hits[k];
                         const int gap = t.x16 - p.x16;
                         PendingHit& ph = pending[pending_count++];
                         ph.attacker = a;
                         ph.victim = v;
                         ph.index = k;
                         ph.box = h;
-                        // launched away from the attacker (so a hit BEHIND flies backwards). Straight above or below: use the hitbox's side
                         ph.dir = abs_i(gap) < 3 * FP ? (h.absolute ? (h.x < 0 ? -1 : 1) : (h.x < 0 ? -p.facing : p.facing)) : sign_i(gap);
                         ph.sx16 = ((box.x + body.x) / 2) * FP;
                         ph.sy16 = ((box.y + body.y) / 2) * FP;
@@ -1359,14 +2875,28 @@ namespace battle
                 Fighter& attacker = f[ph.attacker];
                 Fighter& victim = f[ph.victim];
                 attacker.hit_done |= 1u << ph.index;
-                if(attacker.state == ST_GRABBED) { continue; }                 // (it was just caught by a counter: its other hits are void)
+                if(attacker.state == ST_GRABBED) { continue; }
                 if(ph.stops_dash && attacker.state == ST_ATTACK) { attacker.drive_cut = true; }
 
-                // a grab: no damage, the grabber's next move takes over (Filip's leap)
                 if(ph.box.grab) { grab_connects(ph.attacker, ph.victim); continue; }
 
-                // Filip's counter: a melee hit that lands inside the counter window is caught and answered
-                const int fs_id = (attacker.move && attacker.move->final_smash != FS_NONE) ? attacker.move->final_smash : FS_NONE;
+                const bool same_team = (team_of(ph.victim) == team_of(ph.attacker));
+                const int fs_id = (attacker.move && attacker.move->final_smash != FS_NONE)
+                                  ? ((same_team && attacker.move->ally_final_smash != FS_NONE)
+                                     ? attacker.move->ally_final_smash : attacker.move->final_smash)
+                                  : FS_NONE;
+
+                if(same_team && fs_id != FS_NONE)
+                {
+                    if(pending_final_smash < 0)
+                    {
+                        pending_final_smash = ph.attacker;
+                        pending_final_smash_victim = ph.victim;
+                        pending_final_smash_id = fs_id;
+                    }
+                    continue;
+                }
+                if(same_team) { continue; }
 
                 const Move* vm = victim.move;
                 if(fs_id == FS_NONE && vm && vm->on_counter_melee && in_window(victim, vm->counter_start, vm->counter_end))
@@ -1375,11 +2905,14 @@ namespace battle
                     continue;
                 }
 
-                const int damage = buffed_damage(attacker, ph.box.damage);
+                const int base_dmg = ph.box.weapon_scaled ? scale_weapon_dmg(attacker, ph.box.damage) : ph.box.damage;
+                const int kb_x = ph.box.weapon_scaled ? scale_weapon_kb(attacker, ph.box.kb_x) : ph.box.kb_x;
+                const int kb_y = ph.box.weapon_scaled ? scale_weapon_kb(attacker, ph.box.kb_y) : ph.box.kb_y;
+                const int damage = buffed_damage(attacker, base_dmg);
 
                 if(ph.box.keep_grab && victim.grabbed_by == ph.attacker)
                 {
-                    scratch(victim, damage, ph.box.kb_x, ph.box.kb_y, ph.dir, fs_id != FS_NONE ? nullptr : &attacker);
+                    scratch(victim, damage, kb_x, kb_y, ph.dir, fs_id != FS_NONE ? nullptr : &attacker);
                     spawn_effect(FX_SPARK, ph.sx16, ph.sy16, 10);
                     continue;
                 }
@@ -1391,14 +2924,69 @@ namespace battle
                     if(victim.hp <= applied_dmg) { applied_dmg = victim.hp > 1 ? victim.hp - 1 : 0; }
                 }
 
-                hit(victim, applied_dmg, ph.box.kb_x, ph.box.kb_y, ph.box.hitstun, ph.dir, ph.sx16, ph.sy16, fs_id != FS_NONE ? nullptr : &attacker);
-                if(fs_id != FS_NONE && pending_final_smash < 0)
+                hit(victim, applied_dmg, kb_x, kb_y, ph.box.hitstun, ph.dir, ph.sx16, ph.sy16, fs_id != FS_NONE ? nullptr : &attacker);
+                if(ph.box.weapon_scaled && fs_id == FS_NONE) { use_weapon_durability(attacker); }
+                if(ph.box.delayed_boom_dmg > 0 && attacker.har_power_timer > 0 && victim.hp > 0)
                 {
-                    pending_final_smash = ph.attacker;
-                    pending_final_smash_victim = ph.victim;
-                    pending_final_smash_id = fs_id;
+                    victim.bomb_timer = HAR_BOMB_DELAY;
+                    victim.bomb_owner = ph.attacker;
+                    victim.bomb_dmg = ph.box.delayed_boom_dmg;
+                }
+                if(fs_id != FS_NONE)
+                {
+                    if(attacker.move && attacker.move->powered_fs != FS_NONE && attacker.har_power_timer > 0)
+                    {
+                        const int pfs_id = attacker.move->powered_fs;
+                        attacker.har_power_timer = 0;
+                        if(pending_final_smash < 0)
+                        {
+                            pending_final_smash = ph.attacker;
+                            pending_final_smash_victim = ph.victim;
+                            pending_final_smash_id = pfs_id;
+                        }
+                        return;
+                    }
+                    if(attacker.move && attacker.move->in_stage_fs)
+                    {
+                        begin_in_stage_fs(ph.attacker, ph.victim);
+                        return;
+                    }
+                    if(pending_final_smash < 0)
+                    {
+                        pending_final_smash = ph.attacker;
+                        pending_final_smash_victim = ph.victim;
+                        pending_final_smash_id = fs_id;
+                    }
                 }
                 if(ph.box.pogo > 0) { pogo(attacker, ph.box.pogo); }
+            }
+
+            // Melee attacks can chip/break placed wall blocks
+            for(int a = 0; a < MAX_FIGHTERS; ++a)
+            {
+                Fighter& p = f[a];
+                if(!p.active || p.state != ST_ATTACK || !p.move) { continue; }
+                for(int k = 0; k < p.move->hit_count; ++k)
+                {
+                    Rect box;
+                    if(!hitbox_now(a, k, box) || (p.hit_done & (1u << k))) { continue; }
+                    for(int bk = 0; bk < MAX_BLOCKS; ++bk)
+                    {
+                        PlacedBlock& bl = blocks[bk];
+                        if(!bl.active) { continue; }
+                        const Rect bl_box{ bl.x + bl.w / 2, bl.y + BLOCK_H / 2, bl.w, BLOCK_H };
+                        if(overlaps(box, bl_box))
+                        {
+                            p.hit_done |= 1u << k;
+                            const int d = p.move->hits[k].damage;
+                            bl.hp -= d > 2 ? d : 2;
+                            spawn_effect(bl.hp <= 0 ? FX_DUST : FX_SPARK, (bl.x + bl.w / 2) * FP, (bl.y + BLOCK_H / 2) * FP, 10);
+                            if(bl.hp <= 0) { bl.active = false; }
+                            ev.hit = true;
+                            break;
+                        }
+                    }
+                }
             }
         }
 
@@ -1412,9 +3000,14 @@ namespace battle
         // `victim` is now held by `grabber`: it can't act and is kept in front of the grabber until it is hit or let go
         void begin_grab(int grabber, int victim)
         {
+            
             Fighter& g = f[grabber];
             Fighter& v = f[victim];
             cancel_move(v);
+            v.on_pig = false;
+            v.pig_hp = 0;
+            v.pig_hits = 0;
+            v.pig_hit_cd = 0;
             v.state = ST_GRABBED;
             v.grabbed_by = grabber;
             v.vx = 0;
@@ -1423,6 +3016,7 @@ namespace battle
             g.holding = victim;
             g.vx = 0;
             g.vy = 0;
+            ev.grab = true;
         }
 
         void release_grab(int victim)
@@ -1449,9 +3043,10 @@ namespace battle
         // the victim is let go.
         void update_grabs()
         {
-            for(int v = 0; v < count; ++v)
+            for(int v = 0; v < MAX_FIGHTERS; ++v)
             {
                 Fighter& vf = f[v];
+                if(!vf.active) { continue; }
                 if(vf.grabbed_by < 0) { continue; }
                 Fighter& gf = f[vf.grabbed_by];
                 if(winner >= 0 || gf.state != ST_ATTACK || gf.holding != v || vf.state == ST_KO) { release_grab(v); continue; }
@@ -1494,6 +3089,7 @@ namespace battle
             begin_move(c, next, c.move_magic);
             spawn_effect(FX_SPARK, (a.x16 + c.x16) / 2, c.y16 - (c.stats->body_h * FP) / 2, 10);
             ev.absorb = true;
+            ev.grab = true;
         }
 
         // damage to somebody who stays held (the three scratches). If it would knock them out, it is a normal hit.
@@ -1536,9 +3132,10 @@ namespace battle
         // The attacker's damage buff (phys_pct for A moves, magic_pct for B moves). Whole numbers lose the small parts
         // (+20% of a 2 damage slap is 0.4), so what is missing is kept in dmg_carry and paid out on later hits:
         // five slaps of 2 really do add up to 12 instead of 10.
-        static int buffed_damage(Fighter& attacker, int damage)
+                static int buffed_damage(Fighter& attacker, int damage)
         {
-            if(damage <= 0) { return damage; }                            // (a hit that only stuns stays a hit that only stuns)
+            if(damage <= 0) { return damage; }
+            if(attacker.har_power_timer > 0) { damage = damage * 130 / 100; }                            // (a hit that only stuns stays a hit that only stuns)
             const int type = attacker.move_magic ? 1 : 0;
             const int pct = type == 1 ? attacker.stats->magic_pct : attacker.stats->phys_pct;
             if(pct == 100) { return damage; }
@@ -1588,9 +3185,35 @@ namespace battle
         // Damage goes through the defenses. A shield removes a LOT of it, but the boost fades as the shield drains.
         void hurt(Fighter& t, int damage, int kb_x, int kb_y, int stun, int dir, Fighter* attacker = nullptr)
         {
+            if(t.state == ST_ATTACK && t.move && t.move->final_smash != FS_NONE) { return; }
             const FighterStats& s = *t.stats;
             clear_grab_of(t);
-            int reduction = s.defense;
+
+            if(t.on_pig)
+            {
+                const int pig_dmg = damage > 0 ? damage : 1;
+                t.pig_hp -= pig_dmg;
+                if(t.pig_hp <= 0)
+                {
+                    t.on_pig = false;
+                    t.pig_hp = 0;
+                    t.pig_hits = 0;
+                    t.pig_hit_cd = 0;
+                    spawn_effect(FX_DUST, t.x16 - 6 * FP, t.y16 - 8 * FP, 18);
+                    spawn_effect(FX_DUST, t.x16 + 6 * FP, t.y16 - 10 * FP, 20);
+                    cancel_move(t);
+                    t.state = ST_HURT;
+                    t.timer = 24;
+                    launch(t, fp(2.0), fp(-3.8), dir);
+                    ev.hitsmash = true;
+                }
+                else
+                {
+                    ev.hit = true;
+                }
+                return;
+            }
+            int reduction = s.defense + t.def_buff_amount;
             const bool guarding = t.state == ST_SHIELD;
             if(guarding) { reduction += SHIELD_MAX_REDUCTION * t.shield / SHIELD_MAX; }
             if(reduction > 95) { reduction = 95; }
@@ -1628,8 +3251,25 @@ namespace battle
                 t.has_stored = false;
                 t.state = ST_KO;
                 t.timer = 0;
-                launch(t, kb_x, kb_y, dir);                               // the final blow sends them flying too
-                ev.ko = true;
+                if(t.is_clone)
+                {
+                    if(net_client)
+                    {
+                        t.hp = 1;
+                        t.state = ST_HURT;
+                        t.timer = 8;
+                    }
+                    else
+                    {
+                        t.active = false;
+                        spawn_effect(FX_DUST, t.x16, t.y16 - 12 * FP, 16);
+                    }
+                }
+                else
+                {
+                    launch(t, kb_x, kb_y, dir);
+                    ev.ko = true;
+                }
             }
             else if(guarding)
             {

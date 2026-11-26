@@ -44,6 +44,16 @@
 #include "bn_sprite_items_swipe.h"
 #include "bn_sprite_items_hit_spark.h"
 #include "bn_sprite_items_junk.h"
+#include "bn_sprite_tiles_ptr.h"
+#include "bn_sprite_items_mc_props.h"
+#include "bn_sprite_items_mc_rides.h"
+#include "bn_sprite_items_harueslice_sword.h"
+#include "bn_sprite_items_sonic_slash.h"
+#include "bn_sprite_items_blue_slash.h"
+#include "bn_regular_bg_items_blue_dim_bg.h"
+#include "bn_regular_bg_position_hbe_ptr.h"
+#include "bn_regular_bg_items_minecraft_fs_bg.h"
+#include "bn_regular_bg_items_kitchen_fs_bg.h"
 
 #include "bn_display.h"
 #include "bn_affine_bg_item.h"
@@ -55,6 +65,8 @@
 #include "bn_affine_bg_dy_register_hbe_ptr.h"
 #include "bn_sprite_double_size_mode.h"
 #include "bn_regular_bg_items_fs_bg.h"
+#include "bn_regular_bg_items_ring_bg.h"
+#include "bn_regular_bg_items_gym_lights_bg.h"
 #include "bn_sprite_items_fire_beam.h"
 #include "bn_sprite_items_fire_aura.h"
 #include "bn_sprite_items_fire_impact.h"
@@ -112,6 +124,8 @@ namespace battle
         EV_BOOM    = 1 << 9,    // the dair explosion
         EV_SMASH   = 1 << 10,
         EV_FINAL_SMASH = 1 << 11,
+        EV_MINING = 1 << 12,
+        EV_GRAB = 1 << 13,
     };
 
     // ============================================================================================
@@ -140,10 +154,18 @@ namespace battle
     constexpr int snep_counter[5] = {40,41,42,43,44};           // the counter stance
     constexpr int snep_counter_offset = 0;                      // 0 = the same frames 40-44 facing left too. If the sheet has a separate
                                                                 // left version, put its offset here (careful: a frame that is not on the sheet crashes)
-    constexpr int snep_grab[5] = {35,34,33,34,35};              // grabbing the attacker (facing left = +5 = 40,39,38,39,40)
+    constexpr int snep_grab[5] = {34,33,32,33,34};              // grabbing the attacker (facing left = +5 = 40,39,38,39,40)
     constexpr int snep_grab_offset = 5;
     constexpr int snep_throw_pose = 35;                         // the pose he finishes the spin on when he throws the shot back
     constexpr int snep_throw_pose_offset = 5;                   // (facing left = 40)
+
+    constexpr int umb_mine[4] = {30,31,32,33};
+    constexpr int umb_sword_slash[4] = {38,39,40,41};
+    constexpr int umb_place[4] = {46,47,48,49};
+    constexpr int umb_left_offset = 4;
+
+    constexpr int har_slash[3]={30,31,32};
+    constexpr int har_slash_offset = 3;
 
     constexpr int SPRITE_FEET = 12;                  // from the middle of the sprite down to the feet (as in the overworld)
 
@@ -163,24 +185,71 @@ namespace battle
 
     // The pose during a move. These are all stand-ins made from the frames you already have: moves that go up show
     // the "up" frames, moves that go down show the "down" frames, and the spin turns through all four directions.
-    inline int attack_frame(int anim, int facing, int side, int move_frame)
+    // Shared 1:1 slash sequence so Harue's hands and 64x64 sword play ONCE together
+    inline int har_slash_step(int anim, int mf, bool& spin_left_half)
     {
-        const int WAF_DIR_JET = facing > 0 ? WAF_SIDE_JET : WAF_SIDE_JET+1;
-        // const int WAF_JAB_SIDE = facing > 0 ? waff_jab[move_frame] : waff_jab[move_frame]+4;
+        spin_left_half = false;
         switch(anim)
         {
-            // Waffles MoveSet
+            case ANIM_HAR_JAB:
+                if(mf >= 0 && mf <= 8)   { return mf / 3; }
+                if(mf >= 10 && mf <= 18) { return 2 - ((mf - 10) / 3); }
+                if(mf >= 20 && mf <= 28) { return (mf - 20) / 3; }
+                return -1;
+            case ANIM_HAR_FSMASH:
+                if(mf >= 0 && mf < 10)   { return 0; }
+                if(mf >= 10 && mf < 15)  { return 1; }
+                if(mf >= 15 && mf < 21)  { return 2; }
+                return -1;
+            case ANIM_HAR_FS:
+                if(mf >= 0 && mf < 5)    { return 0; }
+                if(mf >= 5 && mf < 10)   { return 1; }
+                if(mf >= 10 && mf < 16)  { return 2; }
+                return -1;
+            case ANIM_HAR_USMASH:
+            case ANIM_HAR_BSHOT:
+                if(mf >= 0 && mf < 4)    { return 0; }
+                if(mf >= 4 && mf < 8)    { return 1; }
+                if(mf >= 8 && mf < 13)   { return 2; }
+                return -1;
+            case ANIM_HAR_DASH:
+                if(mf >= 5 && mf < 9)    { return 0; }
+                if(mf >= 9 && mf < 13)   { return 1; }
+                if(mf >= 13 && mf < 18)  { return 2; }
+                return -1;
+            case ANIM_HAR_UPDOWN:
+                if(mf >= 4 && mf < 8)    { return 0; }
+                if(mf >= 8 && mf < 12)   { return 1; }
+                if(mf >= 12 && mf < 17)  { return 2; }
+                if(mf >= 24 && mf < 28)  { return 2; }
+                if(mf >= 28 && mf < 32)  { return 1; }
+                if(mf >= 32 && mf < 37)  { return 0; }
+                return -1;
+            case ANIM_HAR_SPIN:
+                if(mf >= 3 && mf < 12)   { return (mf - 3) / 3; }
+                if(mf >= 12 && mf < 21)  { spin_left_half = true; return (mf - 12) / 3; }
+                return -1;
+            default:
+                return -1;
+        }
+    }
+
+    inline int attack_frame(int anim, int facing, int side, int move_frame)
+    {
+        const int WAF_DIR_JET = facing > 0 ? WAF_SIDE_JET : WAF_SIDE_JET + 1;
+        switch(anim)
+        {
             case ANIM_SNEP_PUNCH:
             {
-                const int pic = play_once(snep_basic_punch,5,4,0,move_frame);
+                const int pic = play_once(snep_basic_punch, 5, 4, 0, move_frame);
                 return pic >= 0 ? pic + (side == DIR_LEFT ? snep_basic_punch_offset : 0) : sheet_frame(side, false);
             }
-            case ANIM_SNEP_JAB:                         // the slap combo: three punches (hits at frames 4, 14 and 24)
+            case ANIM_SNEP_JAB:
             {
                 if(move_frame >= 32) { return sheet_frame(side, false); }
                 return snep_basic_punch[(move_frame % 10) * 5 / 10] + (side == DIR_LEFT ? snep_basic_punch_offset : 0);
             }
-            case ANIM_SNEP_HEAVY:                       // the heavy punch: a long wind-up, then the punch (hit at 34)
+            case ANIM_SNEP_HEAVY:
             {
                 const int off = side == DIR_LEFT ? snep_basic_punch_offset : 0;
                 if(move_frame < 20) { return snep_basic_punch[0] + off; }
@@ -189,26 +258,26 @@ namespace battle
                 if(move_frame < 50) { return snep_basic_punch[4] + off; }
                 return sheet_frame(side, false);
             }
-            case ANIM_SNEP_FLIP:                        // the backflip: turns through the four directions while it flies
+            case ANIM_SNEP_FLIP:
             {
                 static const int order[4] = { DIR_RIGHT, DIR_UP, DIR_LEFT, DIR_DOWN };
                 if(move_frame < 4 || move_frame >= 24) { return sheet_frame(side, false); }
                 const int step = ((move_frame - 4) / 3) % 4;
                 return sheet_frame(facing > 0 ? order[step] : order[(4 - step) % 4], false);
             }
-            case ANIM_SNEP_DSMASH:                      // left punch first (frames 0-14), then the right one (16-30)
+            case ANIM_SNEP_DSMASH:
             {
                 const int left = play_once(snep_basic_punch, 5, 3, 0, move_frame);
                 if(left >= 0) { return left + snep_basic_punch_offset; }
                 const int right = play_once(snep_basic_punch, 5, 3, 16, move_frame);
                 return right >= 0 ? right : sheet_frame(side, false);
             }
-            case ANIM_SNEP_COUNTER:                     // the counter stance: plays once and holds the last picture
+            case ANIM_SNEP_COUNTER:
             {
                 const int pic = play_once(snep_counter, 5, 4, 0, move_frame, true);
                 return pic + (side == DIR_LEFT ? snep_counter_offset : 0);
             }
-            case ANIM_SNEP_COUNTER_GRAB:                // grabs the attacker (0-29), then the counter punch (30-44)
+            case ANIM_SNEP_COUNTER_GRAB:
             {
                 const int grab = play_once(snep_grab, 5, 6, 0, move_frame);
                 if(grab >= 0) { return grab + (side == DIR_LEFT ? snep_grab_offset : 0); }
@@ -216,23 +285,23 @@ namespace battle
                 if(punch >= 0) { return punch + (side == DIR_LEFT ? snep_basic_punch_offset : 0); }
                 return sheet_frame(side, false);
             }
-            case ANIM_SNEP_SPIN_THROW:                  // spins with the shot (0-23), then the throwing pose
+            case ANIM_SNEP_SPIN_THROW:
             {
                 static const int order[4] = { DIR_DOWN, DIR_RIGHT, DIR_UP, DIR_LEFT };
                 if(move_frame < 24) { return sheet_frame(order[(move_frame / 3) % 4], false); }
                 return snep_throw_pose + (side == DIR_LEFT ? snep_throw_pose_offset : 0);
             }
-            case ANIM_SNEP_THROW_UP:                    // looks up, then throws
+            case ANIM_SNEP_THROW_UP:
                 return sheet_frame(DIR_UP, true) + (move_frame >= 10 ? 2 : 0);
-            case ANIM_SNEP_LEAP:                        // crouch, fly, then the (long) recovery on the ground
+            case ANIM_SNEP_LEAP:
                 if(move_frame < 6 || move_frame >= 30) { return sheet_frame(side, false); }
                 return sheet_frame(side, true) + 1;
-            case ANIM_SNEP_SCRATCH:                     // quick alternating punches while he holds on
+            case ANIM_SNEP_SCRATCH:
             {
                 if(move_frame >= 50) { return sheet_frame(side, false); }
                 return snep_basic_punch[(move_frame / 4) % 2 == 0 ? 2 : 3] + (side == DIR_LEFT ? snep_basic_punch_offset : 0);
             }
-            case ANIM_SNEP_DAIR:                        // the pogo kick
+            case ANIM_SNEP_DAIR:
                 return sheet_frame(side, true) + 1;
             case ANIM_SLAP:
                 if(move_frame < 30) { return waff_jab[(move_frame % 10) * 4 / 10] + (side == DIR_LEFT ? waff_jab_left_ofset : 0); }
@@ -244,20 +313,20 @@ namespace battle
             }
             case ANIM_RTS:
             {
-                const int pic = play_once(waff_returntosender,2,3,0,move_frame);
-                return pic >= 0 ? pic + (side == DIR_LEFT ? waff_left_returntosender : 0) : sheet_frame(side,false);
+                const int pic = play_once(waff_returntosender, 2, 3, 0, move_frame);
+                return pic >= 0 ? pic + (side == DIR_LEFT ? waff_left_returntosender : 0) : sheet_frame(side, false);
             }
-            case ANIM_KICK:     return side == DIR_RIGHT ? WAF_KICK : WAF_KICK+7;
+            case ANIM_KICK:     return side == DIR_RIGHT ? WAF_KICK : WAF_KICK + 7;
             case ANIM_SHOOT:    return sheet_frame(side, true) + 2;
             case ANIM_TAIL_UP:
             {
-                const int pic = play_once(waff_up_smash, 8,5,0, move_frame);
+                const int pic = play_once(waff_up_smash, 8, 5, 0, move_frame);
                 return pic >= 0 ? pic : sheet_frame(side, false);
             }
             case ANIM_JET_UP:   return WAF_UP_JET;
             case ANIM_SLAM:
             {
-                const int pic = play_once(waff_down_smash, 8,5,0, move_frame);
+                const int pic = play_once(waff_down_smash, 8, 5, 0, move_frame);
                 return pic >= 0 ? pic : sheet_frame(side, false);
             }
             case ANIM_JET_DOWN: return sheet_frame(DIR_DOWN, true) + 1;
@@ -267,6 +336,50 @@ namespace battle
                 static const int order[4] = { DIR_DOWN, DIR_RIGHT, DIR_UP, DIR_LEFT };
                 return sheet_frame(order[(move_frame / 3) % 4], false);
             }
+            case ANIM_UMB_MINE:
+            {
+                const int pic = play_once(umb_mine, 4, 6, 0, move_frame);
+                return pic >= 0 ? pic + (side == DIR_LEFT ? umb_left_offset : 0) : sheet_frame(side, false);
+            }
+            case ANIM_UMB_SLASH:
+            {
+                const int pic = play_once(umb_sword_slash, 4, 5, 0, move_frame);
+                return pic >= 0 ? pic + (side == DIR_LEFT ? umb_left_offset : 0) : sheet_frame(side, false);
+            }
+            case ANIM_UMB_PLACE:
+            {
+                const int pic = play_once(umb_place, 4, 5, 0, move_frame);
+                return pic >= 0 ? pic + (side == DIR_LEFT ? umb_left_offset : 0) : sheet_frame(side, false);
+            }
+            case ANIM_UMB_BOW:
+                return sheet_frame(DIR_UP, true) + (move_frame >= 12 ? 2 : 0);
+            case ANIM_UMB_THROW:
+                return sheet_frame(side, true) + (move_frame >= 7 ? 2 : 0);
+            case ANIM_WAF_CHARGE:
+                return sheet_frame(DIR_UP, true) + ((move_frame / 4) % 2);
+            case ANIM_HAR_JAB:
+            case ANIM_HAR_FSMASH:
+            case ANIM_HAR_FS:
+            case ANIM_HAR_USMASH:
+            case ANIM_HAR_DASH:
+            case ANIM_HAR_BSHOT:
+            case ANIM_HAR_UPDOWN:
+            {
+                bool left_half = false;
+                const int idx = har_slash_step(anim, move_frame, left_half);
+                if(idx >= 0) { return har_slash[idx] + (side == DIR_LEFT ? har_slash_offset : 0); }
+                if(anim == ANIM_HAR_UPDOWN && move_frame >= 16 && move_frame < 24) { return sheet_frame(DIR_UP, true) + 1; }
+                return sheet_frame(side, false);
+            }
+            case ANIM_HAR_SPIN:
+            {
+                static const int order[4] = { DIR_DOWN, DIR_RIGHT, DIR_UP, DIR_LEFT };
+                return sheet_frame(order[(move_frame / 3) % 4], false);
+            }
+            case ANIM_HAR_REFLECT:
+                return facing > 0 ? SHIELD : SHIELD + 1;
+            case ANIM_HAR_CHARGE:
+                return facing > 0 ? SHIELD : SHIELD + 1;
             case ANIM_STANCE:   return sheet_frame(DIR_DOWN, false);
             default:            return sheet_frame(side, true);
         }
@@ -292,6 +405,12 @@ namespace battle
         }
     }
 
+    inline int safe_frame(const bn::sprite_item& item, int frame, int fallback)
+    {
+        const int count = item.tiles_item().graphics_count();
+        return (frame >= 0 && frame < count) ? frame : fallback;
+    }
+
     // What a shot looks like: its sprite sheet, how many pictures it has, and how many game frames each is shown.
     // A new PROJ_... kind (battle_logic.h) needs a line here.
     struct ProjArt
@@ -312,6 +431,12 @@ namespace battle
             case PROJ_JUNK_BAT:    return ProjArt{ &bn::sprite_items::junk, 1, 1, 2 };
             case PROJ_JUNK_LAPTOP: return ProjArt{ &bn::sprite_items::junk, 1, 1, 3 };
             case PROJ_JUNK_BALL:   return ProjArt{ &bn::sprite_items::junk, 1, 1, 4 };
+            case PROJ_FIREBALL:    return ProjArt{ &bn::sprite_items::mc_props, 2, 4, 2 };
+            case PROJ_BOOMERANG:   return ProjArt{ &bn::sprite_items::mc_props, 4, 3, 6 };
+            case PROJ_ARROW:       return ProjArt{ &bn::sprite_items::mc_props, 1, 1, 10 };
+            case PROJ_MINECART:    return ProjArt{ &bn::sprite_items::mc_rides, 2, 4, 2 };
+            case PROJ_TNT:         return ProjArt{ &bn::sprite_items::mc_props, 1, 1, 4 };
+            case PROJ_SONIC_SLASH: return ProjArt{ &bn::sprite_items::sonic_slash, 2, 3, 0 };
             default:             return ProjArt{ &bn::sprite_items::water_shot, 2, 5 };   // PROJ_WATER
         }
     }
@@ -342,8 +467,42 @@ namespace battle
         in.jump    = bn::keypad::r_pressed();
         in.attack  = bn::keypad::a_pressed();
         in.special = bn::keypad::b_pressed();
+        in.special_held = bn::keypad::b_held();
         in.shield  = bn::keypad::l_held();
         in.final_smash = bn::keypad::select_pressed();
+        return in;
+    }
+
+    // Link battles: the RAW held buttons (the "pressed this frame" edges are derived later, identically on both consoles)
+    inline unsigned read_player_held()
+    {
+        unsigned h = 0;
+        if(bn::keypad::left_held())   { h |= net::Lockstep::H_LEFT; }
+        if(bn::keypad::right_held())  { h |= net::Lockstep::H_RIGHT; }
+        if(bn::keypad::up_held())     { h |= net::Lockstep::H_UP; }
+        if(bn::keypad::down_held())   { h |= net::Lockstep::H_DOWN; }
+        if(bn::keypad::l_held())      { h |= net::Lockstep::H_SHIELD; }
+        if(bn::keypad::r_held())      { h |= net::Lockstep::H_JUMP; }
+        if(bn::keypad::a_held())      { h |= net::Lockstep::H_ATTACK; }
+        if(bn::keypad::b_held())      { h |= net::Lockstep::H_SPECIAL; }
+        if(bn::keypad::select_held()) { h |= net::Lockstep::H_FS; }
+        return h;
+    }
+
+    inline Input expand_held(unsigned h, unsigned prev)
+    {
+        Input in;
+        if(h & net::Lockstep::H_LEFT)  { in.move -= 1; }
+        if(h & net::Lockstep::H_RIGHT) { in.move += 1; }
+        in.up      = (h & net::Lockstep::H_UP) != 0;
+        in.down    = (h & net::Lockstep::H_DOWN) != 0;
+        in.shield  = (h & net::Lockstep::H_SHIELD) != 0;
+        const unsigned rising = h & ~prev;
+        in.jump        = (rising & net::Lockstep::H_JUMP) != 0;
+        in.attack      = (rising & net::Lockstep::H_ATTACK) != 0;
+        in.special     = (rising & net::Lockstep::H_SPECIAL) != 0;
+        in.special_held = (h & net::Lockstep::H_SPECIAL) != 0;
+        in.final_smash = (rising & net::Lockstep::H_FS) != 0;
         return in;
     }
 
@@ -354,7 +513,7 @@ namespace battle
     struct FighterView
     {
         bn::sprite_ptr sprite;
-        bn::sprite_ptr shield;
+        bn::optional<bn::sprite_ptr> shield;
         bn::sprite_affine_mat_ptr shield_mat;
         bn::sprite_ptr hp_back;
         bn::sprite_ptr hp_fill;
@@ -364,6 +523,14 @@ namespace battle
         bn::optional<bn::sprite_ptr> swipes[2];     // slash pictures where melee hitboxes are active
         bn::optional<bn::sprite_ptr> jet;           // the aqua jet bubble
         bn::optional<bn::sprite_ptr> held;          // the shot fox thief is holding above the head
+        bn::optional<bn::sprite_ptr> pig;           // the pig Umbreon rides
+        bn::optional<bn::sprite_ptr> sword;
+        bn::optional<bn::sprite_ptr> slash_fx;
+        bn::optional<bn::sprite_affine_mat_ptr> sword_mat;
+        bn::vector<bn::sprite_ptr, 12> craft_text;
+        int shown_mat = -1;
+        int shown_tier = -1;
+        int shown_dur = -1;
         int held_kind = -1;
         const bn::sprite_item* sheet = nullptr;     // the sprite sheet this character was made from
         int shown_frame = -1;
@@ -373,34 +540,33 @@ namespace battle
         int shown_hp = -1;
         bool on_right = false;                     // the opponent's HUD is on the right
         int hud_dy = 0;                            // the partner's name and health bar sit this many pixels lower than the player's
-        int tint_mode = 0;                           // 0 = none, 1 = red, 2 = blue
+        int tint_mode = 0;                           // 0 = none, 1 = red, 2 = blue, 3 = water cyan
+        bool is_clone = false;
 
         // `partner` = a computer-controlled friend on the player's side: tinted blue, HUD on a second row, drawn behind the player.
-        FighterView(const FighterDef& def, bool opponent, const char* label, bn::sprite_text_generator& text, bool partner = false, int tint_override = -1) :
+        FighterView(const FighterDef& def, bool opponent, const char* label, bn::sprite_text_generator& text, bool partner = false, int tint_override = -1, bool clone = false) :
             sprite(def.sprite->create_sprite(0, 0, pick_frame(ST_IDLE, opponent ? -1 : 1, 0))),   // made at its real first frame: tiles are only loaded once
-            shield(bn::sprite_items::shield.create_sprite(0, 0)),
             shield_mat(bn::sprite_affine_mat_ptr::create()),
             hp_back(bn::sprite_items::hp_bar.create_sprite(0, 0, 0)),
             hp_fill(bn::sprite_items::hp_bar.create_sprite(0, 0, 1)),
             hp_mat(bn::sprite_affine_mat_ptr::create()),
-            on_right(opponent)
+            on_right(opponent),
+            is_clone(clone)
         {
             sheet = def.sprite;
             shown_frame = pick_frame(ST_IDLE, opponent ? -1 : 1, 0);
             sprite.set_bg_priority(0);
-            sprite.set_z_order(partner ? 1 : (opponent ? 0 : -1));    // the player is drawn in front, the partner behind everyone
+            sprite.set_z_order(clone ? 2 : (partner ? 1 : (opponent ? 0 : -1)));
             hud_dy = partner ? 26 : 0;
 
             tint_mode = (tint_override >= 0) ? tint_override : (opponent ? 1 : (partner ? 2 : 0));
             pal = bn::sprite_palette_ptr::create_new(def.sprite->palette_item());
             if(tint_mode == 1)      { pal->set_fade(bn::color(31, 6, 6), 0.35); }
             else if(tint_mode == 2) { pal->set_fade(bn::color(6, 12, 31), 0.35); }
+            else if(tint_mode == 3) { pal->set_fade(bn::color(4, 22, 31), 0.55); }
             sprite.set_palette(*pal);
 
-            shield.set_bg_priority(0);
-            shield.set_z_order(-3);
-            shield.set_affine_mat(shield_mat);
-            shield.set_visible(false);
+
 
             hp_back.set_bg_priority(0);
             hp_back.set_z_order(-10);
@@ -412,8 +578,13 @@ namespace battle
             hp_back.set_position(bar_center_x, -58 + hud_dy);
             hp_fill.set_position(bar_center_x, -58 + hud_dy);
 
-            if(opponent) { text.set_right_alignment(); text.generate(112, -72, label, name); }
-            else         { text.set_left_alignment();  text.generate(-112, -72 + hud_dy, label, name); }
+            if(clone)
+            {
+                hp_back.set_visible(false);
+                hp_fill.set_visible(false);
+            }
+            else if(opponent) { text.set_right_alignment(); text.generate(112, -72, label, name); }
+            else              { text.set_left_alignment();  text.generate(-112, -72 + hud_dy, label, name); }
             text.set_center_alignment();
 
         }
@@ -422,6 +593,15 @@ namespace battle
     // ============================================================================================
     // THE BATTLE
     // ============================================================================================
+
+    namespace detail
+    {
+        BN_DATA_EWRAM int16_t floor_pa_buf[bn::display::height()] = {};
+        BN_DATA_EWRAM int floor_dx_buf[bn::display::height()] = {};
+        BN_DATA_EWRAM int floor_dy_buf[bn::display::height()] = {};
+        BN_DATA_EWRAM bn::fixed fs_slice_x_buf[bn::display::height()];
+        BN_DATA_EWRAM bn::fixed fs_slice_y_buf[bn::display::height()];
+    }
 
     class Battle
     {
@@ -435,7 +615,7 @@ namespace battle
         void start(const FighterDef& player, const FighterDef& enemy, const StageDef& stage,
                    bn::ivector<bn::sprite_ptr>& covering_blocks, bn::sprite_text_generator& text, unsigned seed,
                    const FighterDef* partner = nullptr, const Buff& buff = Buff(),
-                   const bn::sprite_item* bystander = nullptr, bool debug_mode = false, net::LinkSession* net_session = nullptr, int net_local_idx = -1)
+                   const bn::sprite_item* bystander = nullptr, bool debug_mode = false, net::LinkSession* net_session = nullptr, int net_local_idx = -1, const FighterDef* waffle_ref = nullptr)
         {
             (void)text;
             _stage = &stage;
@@ -443,12 +623,15 @@ namespace battle
             _enemy = &enemy;
             _partner = partner;
             _bystander_item = bystander;
+            _waffle_def = waffle_ref ? waffle_ref : &player;
             _net = net_session;
             _local_idx = (_net && net_local_idx >= 0) ? net_local_idx : 0;
             _debug_enabled = _net ? false : debug_mode;
             init_net_sync_buffers();
             _by_rng = (seed * 2246822519u) | 1u;
             _player_stats = with_buff(player.stats, buff);         // (kept in this object: the fight only points at it)
+            _enemy_stats = enemy.stats;
+            if(partner && !_net) { _enemy_stats.max_hp *= 2; }     // 2v1 fairness: challenged NPC gets 2x HP
             _result = 0;
             events = 0;
 
@@ -457,7 +640,9 @@ namespace battle
             _wipe = 0;
             move_blocks();
 
-            _fight.start(stage.geom, _player_stats, enemy.stats, seed, partner ? &partner->stats : nullptr);
+            _fight.start(stage.geom, _player_stats, _enemy_stats, seed, partner ? &partner->stats : nullptr);
+            _fight.waffle_ref_stats = _waffle_def ? &_waffle_def->stats : nullptr;
+            _fight.net_client = false;      // lockstep: every console simulates everything, identically
 
             // The stage itself is built on the NEXT frame (see PH_SETUP): the overworld was just thrown away, and
             // video memory is much happier if the new pictures are loaded a frame later instead of in the same one. YAY :3
@@ -529,133 +714,111 @@ namespace battle
                         _phase = PH_DEBUG_MENU;
                         return;
                     }
-                    Input in[3] = {};
+                    Input in[MAX_FIGHTERS] = {};
+                    bool stepped = true;               // false on a frame where the sim did not advance (waiting for the peer)
                     if(_net)
                     {
-                        const Input cur = read_player_input();
-                        _net->record_local_input(cur);
+                        net::Lockstep& ls = _net->ls;
+                        ls.schedule(read_player_held());
+                        bn::link::send(ls.next_packet());
+                        for(int i = 0; i < 4 && _net->poll(); ++i) {}
 
-                        if(_local_idx == 0 && (_net_frame % 4 == 0))
+                        unsigned held[2];
+                        unsigned before[2];
+                        if(ls.try_step(_local_idx, held, before))
                         {
-                            // Periodically send authoritative position/HP/smash snapshots from Host -> Client
-                            const int slot = (_net_frame / 4) % 8;
-                            int pkt = 0;
-                            switch(slot)
+                            in[0] = expand_held(held[0], before[0]);        // player 0 = host's fighter on BOTH consoles
+                            in[1] = expand_held(held[1], before[1]);
+                            for(int i = 2; i < MAX_FIGHTERS; ++i)
                             {
-                                case 0: pkt = (net::PKT_BTL_SYNC_POS  << 12) | (0 << 10) | net::LinkSession::clamp10(_fight.f[0].x16 / FP); break;
-                                case 1: pkt = (net::PKT_BTL_SYNC_POS  << 12) | (1 << 10) | net::LinkSession::clamp10(_fight.f[0].y16 / FP + 256); break;
-                                case 2: pkt = (net::PKT_BTL_SYNC_POS  << 12) | (2 << 10) | net::LinkSession::clamp10(_fight.f[1].x16 / FP); break;
-                                case 3: pkt = (net::PKT_BTL_SYNC_POS  << 12) | (3 << 10) | net::LinkSession::clamp10(_fight.f[1].y16 / FP + 256); break;
-                                case 4: pkt = (net::PKT_BTL_SYNC_STAT << 12) | (0 << 10) | net::LinkSession::clamp10(_fight.f[0].hp); break;
-                                case 5: pkt = (net::PKT_BTL_SYNC_STAT << 12) | (1 << 10) | net::LinkSession::clamp10(_fight.f[1].hp); break;
-                                case 6: pkt = (net::PKT_BTL_SYNC_STAT << 12) | (2 << 10) | net::LinkSession::clamp10(_fight.f[0].smash); break;
-                                default:pkt = (net::PKT_BTL_SYNC_STAT << 12) | (3 << 10) | net::LinkSession::clamp10(_fight.f[1].smash); break;
+                                if(_fight.f[i].active) { in[i] = _fight.think(i); }
                             }
-                            bn::link::send(pkt);
+                            _fight.step(in);
+
+                            if(ls.is_checkpoint())
+                            {
+                                bn::link::send((net::PKT_BTL_HASH << 12) | ls.record_hash(_fight.state_hash()));
+                            }
                         }
                         else
                         {
-                            bn::link::send(_net->pack_local_input(cur));
+                            stepped = false;
+                            if(ls.timed_out())
+                            {
+                                // the peer is gone (cable pulled / console off): leave through the result screen
+                                _result = -1;
+                                _phase = PH_RESULT;
+                                _timer = RESULT_FRAMES;
+                            }
                         }
 
-                        _net->poll();
-
-                        in[_local_idx] = cur;
-                        in[1 - _local_idx] = _net->consume_remote_input();
-                        ++_net_frame;
-                        _fight.step(in);
-
-                        if(_local_idx == 1)
+                        if(ls.desync && !_desync_shown)
                         {
-                            // Client applies Host's periodic state snapshots & authoritative FS/KO events
-                            for(int fi = 0; fi < 2; ++fi)
-                            {
-                                if(_net->has_sync_x[fi])
-                                {
-                                    _net->has_sync_x[fi] = false;
-                                    const int cur_x = _fight.f[fi].x16 / FP;
-                                    if(abs_i(_net->sync_x[fi] - cur_x) > 12)
-                                    {
-                                        _fight.f[fi].x16 = _net->sync_x[fi] * FP;
-                                    }
-                                }
-                                if(_net->has_sync_y[fi])
-                                {
-                                    _net->has_sync_y[fi] = false;
-                                    const int cur_y = _fight.f[fi].y16 / FP;
-                                    if(abs_i(_net->sync_y[fi] - cur_y) > 12)
-                                    {
-                                        _fight.f[fi].y16 = _net->sync_y[fi] * FP;
-                                    }
-                                }
-                                if(_net->has_sync_hp[fi])
-                                {
-                                    _net->has_sync_hp[fi] = false;
-                                    int hp = _net->sync_hp[fi];
-                                    if(hp <= 0 && !_net->got_win_event) { hp = 1; }
-                                    _fight.f[fi].hp = hp;
-                                }
-                                if(_net->has_sync_smash[fi])
-                                {
-                                    _net->has_sync_smash[fi] = false;
-                                    _fight.f[fi].smash = _net->sync_smash[fi];
-                                }
-                            }
-
-                            // Let Host authorize Final Smash cutscenes & match KO
-                            _fight.pending_final_smash = -1;
-                            if(_net->got_fs_event)
-                            {
-                                _net->got_fs_event = false;
-                                _fight.pending_final_smash = _net->ev_fs_atk;
-                                _fight.pending_final_smash_victim = _net->ev_fs_vic;
-                                _fight.pending_final_smash_id = _net->ev_fs_id;
-                            }
-
-                            if(_fight.winner >= 0 && !_net->got_win_event)
-                            {
-                                _fight.winner = -1;
-                                if(_fight.f[0].hp <= 0) { _fight.f[0].hp = 1; _fight.f[0].state = ST_HURT; }
-                                if(_fight.f[1].hp <= 0) { _fight.f[1].hp = 1; _fight.f[1].state = ST_HURT; }
-                            }
-                            if(_net->got_win_event)
-                            {
-                                _net->got_win_event = false;
-                                _fight.winner = _net->ev_winner;
-                                const int loser = 1 - _fight.winner;
-                                if(_fight.f[0].hp > 0 && _fight.f[1].hp > 0)
-                                {
-                                    _fight.f[loser].hp = 0;
-                                    _fight.f[loser].state = ST_KO;
-                                }
-                            }
+                            _desync_shown = true;
+                            show_banner(text, "DESYNC");
+                            _banner_timer = 240;
                         }
                     }
                     else
                     {
-                        in[0] = read_player_input();
-                        in[1] = _fight.think(1);
-                        if(_fight.count > 2) { in[2] = _fight.think(2); }
+                        const int ctrl = (_debug_enabled && _fight.debug_ai_target == 0) ? 1 : 0;
+                        in[ctrl] = read_player_input();
+                        for(int i = 0; i < MAX_FIGHTERS; ++i)
+                        {
+                            if(i != ctrl && _fight.f[i].active) { in[i] = _fight.think(i); }
+                        }
                         _fight.step(in);
                     }
-                    collect_events();
+                    if(stepped) { collect_events(); }
 
-                    if(_fs_flash > 0)
+                    if(_fight.fs_combo_active)
                     {
-                        --_fs_flash;
-                        set_flash(bn::fixed(_fs_flash) / 12);
+                        const int ct = _fight.fs_combo_tick;
+                        const bool split_boom = (ct >= 75 && ct <= 86);
+                        const bool end_boom   = (ct >= 232 && ct <= 246);
+                        _shake = split_boom ? ((ct % 2 == 0) ? 3 : -3) : (end_boom ? ((ct % 2 == 0) ? 5 : -5) : 0);
+                        if(split_boom)     { set_flash(bn::fixed(86 - ct) / 11); }
+                        else if(end_boom)  { set_flash(bn::fixed(246 - ct) / 14); }
+                        else
+                        {
+                            set_flash(0);
+                            bn::bg_palettes::set_fade(bn::color(0, 0, 0), bn::fixed(0.60));
+                        }
+                    }
+                    else if(_fight.fs_freeze_timer > 0)
+                    {
+                        const int elapsed = FS_FREEZE_FRAMES - _fight.fs_freeze_timer;
+                        _shake = (elapsed < 10) ? ((elapsed % 2 == 0) ? 2 : -2) : 0;
+                        if(elapsed < 10)
+                        {
+                            set_flash(bn::fixed(10 - elapsed) * bn::fixed(0.09));
+                        }
+                        else
+                        {
+                            set_flash(0);
+                            bn::bg_palettes::set_fade(bn::color(0, 0, 0), bn::fixed(0.72));
+                        }
                     }
                     else
                     {
-                        bool any_smash_ready = false;
-                        for(int i = 0; i < _fight.count; ++i)
+                        _shake = 0;
+                        if(_fs_flash > 0)
                         {
-                            if(_fight.f[i].stats->final_smash_move != nullptr && _fight.f[i].smash >= SMASH_MAX && _fight.f[i].state != ST_KO)
-                            {
-                                any_smash_ready = true;
-                            }
+                            --_fs_flash;
+                            set_flash(bn::fixed(_fs_flash) / 12);
                         }
-                        bn::bg_palettes::set_fade(bn::color(0, 0, 0), any_smash_ready ? bn::fixed(0.42) : bn::fixed(0));
+                        else
+                        {
+                            bool any_smash_ready = false;
+                            for(int i = 0; i < _fight.count; ++i)
+                            {
+                                if(_fight.f[i].stats->final_smash_move != nullptr && _fight.f[i].smash >= SMASH_MAX && _fight.f[i].state != ST_KO)
+                                {
+                                    any_smash_ready = true;
+                                }
+                            }
+                            bn::bg_palettes::set_fade(bn::color(0, 0, 0), any_smash_ready ? bn::fixed(0.42) : bn::fixed(0));
+                        }
                     }
 
                     if(_fight.pending_final_smash >= 0)
@@ -673,9 +836,6 @@ namespace battle
                         unload_stage_gfx();
                         set_flash(1);
                         events |= EV_FINAL_SMASH;
-                        _net_fs_seq = (_net_fs_seq + 1) & 3;
-                        _net_ev_send = (_net && _local_idx == 0) ? 5 : 0;
-                        _net_ev_pkt = (net::PKT_BTL_EVENT << 12) | (1 << 8) | ((_net_fs_seq & 3) << 6) | ((_fs_id & 3) << 4) | ((_fs_victim & 3) << 2) | (_fs_attacker & 3);
                         _phase = PH_FS_ENTER;
                         return;
                     }
@@ -686,13 +846,8 @@ namespace battle
                     {
                         _fs_flash = 0;
                         set_flash(0);
-                        if(_net && _local_idx == 0)
-                        {
-                            _net_ev_send = 6;
-                            _net_ev_pkt = (net::PKT_BTL_EVENT << 12) | (2 << 8) | (_fight.winner & 3);
-                            bn::link::send(_net_ev_pkt);
-                        }
-                        _result = (_fight.winner == _local_idx) ? 1 : -1;
+                        const int me_idx = _net ? _local_idx : ((_debug_enabled && _fight.debug_ai_target == 0) ? 1 : 0);
+                        _result = (_fight.winner == me_idx) ? 1 : -1;
                         _phase = PH_RESULT;
                         _timer = RESULT_FRAMES;
                     }
@@ -704,18 +859,13 @@ namespace battle
                     return;
 
                 case PH_FS_ENTER:
-                    if(_net_ev_send > 0) { --_net_ev_send; bn::link::send(_net_ev_pkt); }
+                    if(_net) { pump_net(); }
                     build_fs_scene(text);
                     _phase = PH_FS_CUTSCENE;
                     return;
 
                 case PH_FS_CUTSCENE:
-                    if(_net)
-                    {
-                        if(_net_ev_send > 0) { --_net_ev_send; bn::link::send(_net_ev_pkt); }
-                        else { bn::link::send((net::PKT_BTL_READY << 12) | 1); }
-                        _net->poll();
-                    }
+                    if(_net) { pump_net(); }
                     update_fs_cutscene(text);
                     return;
 
@@ -723,11 +873,12 @@ namespace battle
                 {
                     build_scene(text);
                     const FinalSmashDef& fs = final_smash_def(_fs_id);
-                    _fight.apply_final_smash_hit(_fs_attacker, _fs_victim, fs.damage, fs.kb_x, fs.kb_y, fs.stun);
+                    _fight.apply_final_smash_hit(_fs_attacker, _fs_victim, fs.damage, fs.kb_x, fs.kb_y, fs.stun, fs.heal, fs.def_bonus, fs.def_frames);
                     collect_events();
                     if(_fight.winner >= 0)
                     {
-                        _result = (_fight.winner == _local_idx) ? 1 : -1;
+                        const int me_idx = _net ? _local_idx : ((_debug_enabled && _fight.debug_ai_target == 0) ? 1 : 0);
+                        _result = (_fight.winner == me_idx) ? 1 : -1;
                         _phase = PH_RESULT;
                         _timer = RESULT_FRAMES;
                     }
@@ -742,7 +893,7 @@ namespace battle
 
                 case PH_RESULT:
                 {
-                    if(_net_ev_send > 0) { --_net_ev_send; bn::link::send(_net_ev_pkt); }
+                    if(_net) { pump_net(); }
                     const bool knockout = _fight.f[0].hp <= 0 || _fight.f[1].hp <= 0;
                     const int t = RESULT_FRAMES - _timer;
                     const bool frozen = knockout && t < KO_FREEZE;
@@ -761,7 +912,7 @@ namespace battle
 
                     if(!frozen && (!slow || t % KO_SLOW_RATE == 0))
                     {
-                        const Input in[3] = {};
+                        const Input in[MAX_FIGHTERS] = {};
                         _fight.step(in);
                     }
 
@@ -841,14 +992,22 @@ namespace battle
         // FINAL SMASH TABLE: add new finishers here, then add a case in build_fs_scene()
         // and update_fs_cutscene() below!
         // ================================================================================
-        struct FinalSmashDef { int damage, kb_x, kb_y, stun; };
+        struct FinalSmashDef { int damage, kb_x, kb_y, stun, heal, def_bonus, def_frames; };
 
         static const FinalSmashDef& final_smash_def(int id)
         {
-            static constexpr FinalSmashDef waffle_fire = { 55, fp(8.5), fp(-5.5), 45 };
+            static constexpr FinalSmashDef waffle_fire = { 55, fp(8.5), fp(-5.5), 45, 0, 0, 0 };
+            static constexpr FinalSmashDef filip_drop  = { 58, fp(7.5), fp(-7.0), 48, 0, 0, 0 };
+            static constexpr FinalSmashDef umb_cart    = { 56, fp(8.0), fp(-6.0), 48, 0, 0, 0 };
+                        static constexpr FinalSmashDef waffle_meal = { 0,  0,       0,        0,  MEAL_HEAL, MEAL_DEF_BONUS, MEAL_DEF_FRAMES };
+            static constexpr FinalSmashDef har_slice   = { 65, fp(9.0), fp(-6.5), 50, 0, 0, 0 };
             switch(id)
             {
-                default: return waffle_fire; // FS_WAFFLE_FIRE
+                case FS_HARUE_SLICE:  return har_slice;
+                case FS_FILIP_DROP:   return filip_drop;
+                case FS_UMB_MINECART: return umb_cart;
+                case FS_WAFFLE_MEAL:  return waffle_meal;
+                default: return waffle_fire;
             }
         }
 
@@ -893,8 +1052,8 @@ namespace battle
                 {
                     int d = row - horizon;
                     if(d < 1) { d = 1; }
-                    _floor_pa[row] = int16_t(FLOOR_DEPTH * 256 / d);
-                    _floor_dy[row] = FLOOR_FOCAL * FLOOR_DEPTH * 256 / d;
+                    detail::floor_pa_buf[row] = int16_t(FLOOR_DEPTH * 256 / d);
+                    detail::floor_dy_buf[row] = FLOOR_FOCAL * FLOOR_DEPTH * 256 / d;
                 }
 
                 _floor_bg = stage.top_item->create_bg(0, 0);
@@ -902,9 +1061,9 @@ namespace battle
                 _floor_bg->set_wrapping_enabled(true);
 
                 update_floor_dx(_cam_x);
-                _floor_pa_hbe = bn::affine_bg_pa_register_hbe_ptr::create(*_floor_bg, _floor_pa);
-                _floor_dx_hbe = bn::affine_bg_dx_register_hbe_ptr::create(*_floor_bg, _floor_dx);
-                _floor_dy_hbe = bn::affine_bg_dy_register_hbe_ptr::create(*_floor_bg, _floor_dy);
+                _floor_pa_hbe = bn::affine_bg_pa_register_hbe_ptr::create(*_floor_bg, detail::floor_pa_buf);
+                _floor_dx_hbe = bn::affine_bg_dx_register_hbe_ptr::create(*_floor_bg, detail::floor_dx_buf);
+                _floor_dy_hbe = bn::affine_bg_dy_register_hbe_ptr::create(*_floor_bg, detail::floor_dy_buf);
 
                 bn::rect_window win = bn::rect_window::internal();
                 win.set_boundaries(front - FLOOR_ROWS - 80, -120, front - 80, 120);
@@ -1029,6 +1188,9 @@ namespace battle
             if(e.blocked) { events |= EV_BLOCKED; }
             if(e.jump)    { events |= EV_JUMP; }
             if(e.ko)      { events |= EV_KO; }
+            if(e.mining)  { events |= EV_MINING;}
+            if(e.grab)    { events |= EV_GRAB;}
+            if(e.final_smash_start) { events |= EV_FINAL_SMASH; }
         }
 
         void unload_stage_bgs()
@@ -1047,23 +1209,32 @@ namespace battle
             for(bn::sprite_ptr& tile : _floor) { tile.set_visible(!hidden); }
             for(Piece& piece : _pieces) { piece.sprite.set_visible(!hidden); }
             if(_bystander) { _bystander->set_visible(!hidden); }
-            for(int i = 0; i < 3; ++i)
+            if(_chg_back) { _chg_back->set_visible(!hidden); }
+            if(_chg_fill) { _chg_fill->set_visible(!hidden); }
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
             {
                 if(!_views[i]) { continue; }
                 FighterView& v = *_views[i];
-                v.hp_back.set_visible(!hidden);
-                v.hp_fill.set_visible(!hidden && _fight.f[i].hp > 0);
+                v.hp_back.set_visible(!hidden && !v.is_clone);
+                v.hp_fill.set_visible(!hidden && !v.is_clone && _fight.f[i].hp > 0);
                 for(bn::sprite_ptr& sp : v.name) { sp.set_visible(!hidden); }
                 for(bn::sprite_ptr& sp : v.hp_text) { sp.set_visible(!hidden); }
+                for(bn::sprite_ptr& sp : v.craft_text) { sp.set_visible(!hidden); }
                 if(hidden)
                 {
-                    v.shield.set_visible(false);
+                    v.shield.reset();
+                    v.sword.reset();
+                    v.slash_fx.reset();
                     v.jet.reset();
                     v.held.reset();
                     v.held_kind = -1;
+                    v.pig.reset();
                     for(bn::optional<bn::sprite_ptr>& sw : v.swipes) { sw.reset(); }
                 }
             }
+            for(bn::optional<bn::sprite_ptr>& sp : _table_sprites) { if(sp) { sp->set_visible(!hidden); } }
+            for(bn::optional<bn::sprite_ptr>& sp : _block_sprites) { if(sp) { sp->set_visible(!hidden); } }
+            for(bn::optional<bn::sprite_ptr>& sp : _freeze_aura)  { if(sp) { sp->set_visible(!hidden); } }
             if(hidden)
             {
                 for(int k = 0; k < MAX_PROJECTILES; ++k)
@@ -1073,7 +1244,7 @@ namespace battle
                     _label[k].clear();
                     _label_id[k] = -1;
                 }
-                for(bn::optional<bn::sprite_ptr>& e : _fx) { e.reset(); }
+                for(int k = 0; k < MAX_EFFECTS; ++k) { _fx[k].reset(); _fx_kind[k] = -1; }
             }
         }
 
@@ -1081,14 +1252,18 @@ namespace battle
         {
             _dbg_box.clear();
             _dbg_text.clear();
-            _views[0].reset();
-            _views[1].reset();
-            _views[2].reset();
+            for(int i = 0; i < MAX_FIGHTERS; ++i) { _views[i].reset(); }
+            _chg_back.reset();
+            _chg_fill.reset();
+            _chg_mat.reset();
+            for(bn::optional<bn::sprite_ptr>& sp : _table_sprites) { sp.reset(); }
+            for(bn::optional<bn::sprite_ptr>& sp : _block_sprites) { sp.reset(); }
+            for(bn::optional<bn::sprite_ptr>& sp : _freeze_aura)  { sp.reset(); }
             _bystander.reset();
             for(int k = 0; k < MAX_PROJECTILES; ++k) { _label[k].clear(); _label_id[k] = -1; }
             for(int k = 0; k < MAX_PROJECTILES; ++k) { _proj_id[k] = -1; }
             for(bn::optional<bn::sprite_ptr>& p : _proj) { p.reset(); }
-            for(bn::optional<bn::sprite_ptr>& e : _fx) { e.reset(); }
+            for(int k = 0; k < MAX_EFFECTS; ++k) { _fx[k].reset(); _fx_kind[k] = -1; }
             _floor.clear();
             _pieces.clear();
             _banner.clear();
@@ -1106,9 +1281,13 @@ namespace battle
 
         void unload_fs_gfx()
         {
+            _fs_slice_hbe_x.reset();
+            _fs_slice_hbe_y.reset();
             _fs_banner.clear();
             _fs_spark.reset();
             _fs_impact.reset();
+            _fs_cart.reset();
+            _fs_cart_mat.reset();
             for(bn::optional<bn::sprite_ptr>& b : _fs_beam) { b.reset(); }
             for(bn::optional<bn::sprite_ptr>& a : _fs_aura) { a.reset(); }
             _fs_atk.reset();
@@ -1123,20 +1302,36 @@ namespace battle
 
         const char* debug_slot_name(int slot) const
         {
-            const FighterStats& s = *_fight.f[1].stats;
-            if(slot == SLOT_COUNT) { return s.final_smash_move ? s.final_smash_move->name : "NONE"; }
+            const FighterStats& s = *_fight.f[_fight.debug_ai_target].stats;
+            if(slot == SLOT_COUNT)     { return s.final_smash_move ? s.final_smash_move->name : "NONE"; }
+            if(slot == SLOT_COUNT + 1) { return "Place Block"; }
+            if(slot == SLOT_COUNT + 2) { return "Craft Weapon"; }
             if(s.moves && s.moves->slot[slot]) { return s.moves->slot[slot]->name; }
             return "NONE";
         }
 
+        bool debug_slot_valid(const FighterStats& s, int slot) const
+        {
+            if(slot == SLOT_COUNT)     { return s.final_smash_move != nullptr; }
+            if(slot == SLOT_COUNT + 1) { return s.spawns_crafting_table; }
+            if(slot == SLOT_COUNT + 2) { return s.spawns_crafting_table; }
+            if(!has_move(s, slot))     { return false; }
+            const Move* m = s.moves->slot[slot];
+            for(int prev = 0; prev < slot; ++prev)
+            {
+                if(s.moves->slot[prev] == m) { return false; }
+            }
+            return true;
+        }
+
         void step_debug_slot(int dir)
         {
-            const FighterStats& s = *_fight.f[1].stats;
-            for(int k = 0; k <= SLOT_COUNT; ++k)
+            const FighterStats& s = *_fight.f[_fight.debug_ai_target].stats;
+            const int total = SLOT_COUNT + 3;
+            for(int k = 0; k < total; ++k)
             {
-                _fight.debug_force_slot = (_fight.debug_force_slot + dir + SLOT_COUNT + 1) % (SLOT_COUNT + 1);
-                if(_fight.debug_force_slot == SLOT_COUNT) { if(s.final_smash_move) { return; } }
-                else if(has_move(s, _fight.debug_force_slot)) { return; }
+                _fight.debug_force_slot = (_fight.debug_force_slot + dir + total) % total;
+                if(debug_slot_valid(s, _fight.debug_force_slot)) { return; }
             }
         }
 
@@ -1144,10 +1339,12 @@ namespace battle
         {
             _dbg_text.clear();
             text.set_center_alignment();
-            text.generate(0, -44, "DEBUG MENU", _dbg_text);
+            text.generate(0, -52, "DEBUG MENU", _dbg_text);
 
             const char* ai_str = _fight.debug_ai_mode == DBG_AI_IDLE ? "OFF" :
                                  (_fight.debug_ai_mode == DBG_AI_FORCE ? "FORCE" : "NORMAL");
+            const int ctrl = (_fight.debug_ai_target == 0) ? 1 : 0;
+            const char* ctrl_name = fighter_def(ctrl)->name;
 
             text.set_left_alignment();
             char line[32];
@@ -1162,13 +1359,15 @@ namespace battle
                     for(int i = 0; val[i] && pos < 29; ++i) { line[pos++] = val[i]; }
                 }
                 line[pos] = 0;
-                text.generate(-84, -20 + row * 18, line, _dbg_text);
+                text.generate(-84, -32 + row * 15, line, _dbg_text);
             };
 
             put_line(0, "AI: ", ai_str);
             put_line(1, "MOVE: ", debug_slot_name(_fight.debug_force_slot));
-            put_line(2, "FILL MY SMASH", _fight.f[0].smash >= SMASH_MAX ? " [FULL]" : " [A]");
-            put_line(3, "HEAL BOTH", " [A]");
+            put_line(2, "CTRL: ", ctrl_name);
+            put_line(3, "FILL MY SMASH", _fight.f[ctrl].smash >= SMASH_MAX ? " [FULL]" : " [A]");
+            put_line(4, "HEAL BOTH", " [A]");
+            put_line(5, "END BATTLE", " [A]");
 
             for(bn::sprite_ptr& sp : _dbg_text) { sp.set_bg_priority(0); sp.set_z_order(-26); }
             text.set_center_alignment();
@@ -1177,7 +1376,7 @@ namespace battle
         void open_debug_menu(bn::sprite_text_generator& text)
         {
             _dbg_cursor = 0;
-            if(_fight.debug_force_slot < SLOT_COUNT && !has_move(*_fight.f[1].stats, _fight.debug_force_slot))
+            if(!debug_slot_valid(*_fight.f[_fight.debug_ai_target].stats, _fight.debug_force_slot))
             {
                 step_debug_slot(1);
             }
@@ -1210,11 +1409,12 @@ namespace battle
                 return;
             }
             bool redraw = false;
-            if(bn::keypad::up_pressed())   { _dbg_cursor = (_dbg_cursor + 3) % 4; redraw = true; }
-            if(bn::keypad::down_pressed()) { _dbg_cursor = (_dbg_cursor + 1) % 4; redraw = true; }
+            if(bn::keypad::up_pressed())   { _dbg_cursor = (_dbg_cursor + 5) % 6; redraw = true; }
+            if(bn::keypad::down_pressed()) { _dbg_cursor = (_dbg_cursor + 1) % 6; redraw = true; }
 
             const int lr = (bn::keypad::right_pressed() ? 1 : 0) - (bn::keypad::left_pressed() ? 1 : 0);
             const bool ap = bn::keypad::a_pressed();
+            const int ctrl = (_fight.debug_ai_target == 0) ? 1 : 0;
 
             if(_dbg_cursor == 0 && (lr != 0 || ap))
             {
@@ -1230,18 +1430,41 @@ namespace battle
                 _fight.debug_cd = 0;
                 redraw = true;
             }
-            else if(_dbg_cursor == 2 && ap)
+            else if(_dbg_cursor == 2 && (lr != 0 || ap))
             {
-                _fight.f[0].smash = SMASH_MAX;
+                _fight.debug_ai_target = 1 - _fight.debug_ai_target;
+                _fight.debug_cd = 0;
+                if(!debug_slot_valid(*_fight.f[_fight.debug_ai_target].stats, _fight.debug_force_slot))
+                {
+                    step_debug_slot(1);
+                }
                 redraw = true;
             }
             else if(_dbg_cursor == 3 && ap)
+            {
+                _fight.f[ctrl].smash = SMASH_MAX;
+                redraw = true;
+            }
+            else if(_dbg_cursor == 4 && ap)
             {
                 for(int i = 0; i < _fight.count; ++i)
                 {
                     _fight.f[i].hp = _fight.f[i].stats->max_hp;
                 }
                 redraw = true;
+            }
+            else if(_dbg_cursor == 5 && ap)
+            {
+                close_debug_menu();
+                _fs_flash = 0;
+                set_flash(0);
+                _banner.clear();
+                _result = 0;
+                make_blocks();
+                _wipe = WIPE_DISTANCE;
+                move_blocks();
+                _phase = PH_CLOSING;
+                return;
             }
 
             if(redraw) { draw_debug_menu(text); }
@@ -1260,7 +1483,11 @@ namespace battle
         {
             switch(_fs_id)
             {
-                default: build_waffle_fs(text); break; // FS_WAFFLE_FIRE
+                case FS_FILIP_DROP:   build_filip_fs(text); break;
+                case FS_UMB_MINECART: build_umb_fs(text); break;
+                case FS_WAFFLE_MEAL:  build_waffle_meal_fs(text); break;
+                case FS_HARUE_SLICE:  build_har_slice_fs(text); break;
+                default: build_waffle_fs(text); break;
             }
         }
 
@@ -1268,7 +1495,753 @@ namespace battle
         {
             switch(_fs_id)
             {
-                default: update_waffle_fs(text); break; // FS_WAFFLE_FIRE
+                case FS_FILIP_DROP:   update_filip_fs(text); break;
+                case FS_UMB_MINECART: update_umb_fs(text); break;
+                case FS_WAFFLE_MEAL:  update_waffle_meal_fs(text); break;
+                case FS_HARUE_SLICE:  update_har_slice_fs(text); break;
+                default: update_waffle_fs(text); break;
+            }
+        }
+
+        // ---- FS_HARUE_SLICE cutscene: Blue Dimension -> Pan Right -> Giant Blue Slash -> Screen Slice! ----
+        void build_har_slice_fs(bn::sprite_text_generator& text)
+        {
+            const FighterDef* atk_def = fighter_def(_fs_attacker);
+            const FighterDef* vic_def = fighter_def(_fs_victim);
+            _fs_cam_x = 0;
+
+            _fs_bg = bn::regular_bg_items::blue_dim_bg.create_bg(136, 0);
+            _fs_bg->set_priority(3);
+            for(int r = 0; r < bn::display::height(); ++r)
+            {
+                detail::fs_slice_x_buf[r] = 0;
+                detail::fs_slice_y_buf[r] = 0;
+            }
+            _fs_slice_hbe_x = bn::regular_bg_position_hbe_ptr::create_horizontal(*_fs_bg, detail::fs_slice_x_buf);
+            _fs_slice_hbe_y = bn::regular_bg_position_hbe_ptr::create_vertical(*_fs_bg, detail::fs_slice_y_buf);
+
+            _fs_atk_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_atk_mat->set_scale(1.5);
+            _fs_atk_pal = bn::sprite_palette_ptr::create_new(atk_def->sprite->palette_item());
+            _fs_atk_pal->set_fade(bn::color(4, 18, 31), 0.35);
+
+            _fs_atk = atk_def->sprite->create_sprite(272, 18, har_slash[0] + har_slash_offset);
+            _fs_atk->set_bg_priority(0);
+            _fs_atk->set_z_order(-1);
+            _fs_atk->set_affine_mat(*_fs_atk_mat);
+            _fs_atk->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_atk->set_palette(*_fs_atk_pal);
+
+            _fs_vic_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_vic_mat->set_scale(1.5);
+            _fs_vic_pal = bn::sprite_palette_ptr::create_new(vic_def->sprite->palette_item());
+            if(_fs_victim == 1)      { _fs_vic_pal->set_fade(bn::color(31, 6, 6), 0.35); }
+            else if(_fs_victim == 2) { _fs_vic_pal->set_fade(bn::color(6, 12, 31), 0.35); }
+
+            _fs_vic = vic_def->sprite->create_sprite(-24, 18, safe_frame(*vic_def->sprite, pick_frame(ST_HURT, -1, 0), sheet_frame(DIR_RIGHT, false)));
+            _fs_vic->set_bg_priority(0);
+            _fs_vic->set_z_order(-1);
+            _fs_vic->set_affine_mat(*_fs_vic_mat);
+            _fs_vic->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_vic->set_palette(*_fs_vic_pal);
+
+            // Giant Blue Slash wave (2.4x scaled sonic_slash)
+            _fs_beam_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_beam_mat->set_scale(2.4);
+            _fs_beam_mat->set_horizontal_flip(true);
+            _fs_beam[0] = bn::sprite_items::sonic_slash.create_sprite(0, 12, 0);
+            _fs_beam[0]->set_bg_priority(0);
+            _fs_beam[0]->set_z_order(-3);
+            _fs_beam[0]->set_affine_mat(*_fs_beam_mat);
+            _fs_beam[0]->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_beam[0]->set_visible(false);
+
+            // Cut-line rift flashes along the diagonal screen slice
+            for(int i = 1; i < 4; ++i)
+            {
+                _fs_beam[i] = bn::sprite_items::blue_slash.create_sprite(0, 0, 1);
+                _fs_beam[i]->set_bg_priority(0);
+                _fs_beam[i]->set_z_order(-5);
+                _fs_beam[i]->set_visible(false);
+            }
+
+            _fs_impact = bn::sprite_items::explosion.create_sprite(-24, 14, 0);
+            _fs_impact->set_bg_priority(0);
+            _fs_impact->set_z_order(-4);
+            _fs_impact->set_visible(false);
+
+            // Harue's 64x64 sword in cutscene
+            _fs_cart_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_cart_mat->set_scale(1.5);
+            _fs_cart = bn::sprite_items::harueslice_sword.create_sprite(0, 18, 3);
+            _fs_cart->set_bg_priority(0);
+            _fs_cart->set_z_order(-2);
+            _fs_cart->set_affine_mat(*_fs_cart_mat);
+            _fs_cart->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_cart->set_visible(false);
+
+            text.set_center_alignment();
+            text.generate(0, -58, "DIMENSION SLASH!", _fs_banner);
+            for(bn::sprite_ptr& sp : _fs_banner) { sp.set_bg_priority(0); sp.set_z_order(-10); }
+        }
+
+        void update_har_slice_fs(bn::sprite_text_generator& text)
+        {
+            (void)text;
+            const FighterDef* atk_def = fighter_def(_fs_attacker);
+            const FighterDef* vic_def = fighter_def(_fs_victim);
+            const int t = _fs_timer++;
+
+            if(t <= 10) { set_flash(bn::fixed(10 - t) / 10); }
+            if(t == 24) { _fs_banner.clear(); }
+
+            // 1. Pan camera right (25..62) to reveal Harue about to slash
+            if(t >= 25 && t < 62)
+            {
+                _fs_cam_x = (t - 25) * 272 / 37;
+                if(_fs_cam_x > 272) { _fs_cam_x = 272; }
+            }
+            // 2. Harue winds up and slashes (63..82), spawning giant blue slash at t=70
+            int slash_wx = 250;
+            if(t >= 70 && t < 125)
+            {
+                slash_wx = 250 - (t - 70) * 274 / 55;
+            }
+            // 3. Camera chases the giant blue slash back to Waffles (76..104)
+            if(t >= 76 && t < 105)
+            {
+                _fs_cam_x = 272 - (t - 76) * 272 / 29;
+                if(_fs_cam_x < 0) { _fs_cam_x = 0; }
+            }
+            else if(t >= 105)
+            {
+                _fs_cam_x = 0;
+            }
+
+            // Update Harue & his sword
+            const int ax = 272 - _fs_cam_x;
+            _fs_atk->set_visible(ax > -150 && ax < 150);
+            _fs_atk->set_position(ax, 18);
+            if(t >= 68 && t < 84)
+            {
+                const int st = (t - 68) / 5;
+                const int sidx = (st > 2) ? 2 : st;
+                _fs_atk->set_tiles(atk_def->sprite->tiles_item(), har_slash[sidx] + har_slash_offset);
+                _fs_cart->set_visible(_fs_atk->visible());
+                _fs_cart->set_position(ax, 18);
+                _fs_cart->set_tiles(bn::sprite_items::harueslice_sword.tiles_item(), sidx);
+                _fs_cart->set_horizontal_flip(true);
+                
+            }
+            else
+            {
+                _fs_atk->set_tiles(atk_def->sprite->tiles_item(), (t >= 48 && t < 68) ? (har_slash[0] + har_slash_offset) : sheet_frame(DIR_LEFT, false));
+                _fs_cart->set_visible(false);
+            }
+            if(t == 68) { events |= EV_SWING | EV_SHOT; }
+
+            // Giant blue slash projectile heading toward victim
+            if(t >= 70 && t < 125)
+            {
+                const int sx = slash_wx - _fs_cam_x;
+                _fs_beam[0]->set_visible(sx > -160 && sx < 160);
+                _fs_beam[0]->set_position(sx, 14);
+                _fs_beam[0]->set_tiles(bn::sprite_items::sonic_slash.tiles_item(), (t / 3) % 2);
+            }
+            else
+            {
+                _fs_beam[0]->set_visible(false);
+            }
+
+            // Victim + Screen Slice Impact (125..174)
+            int shake_x = 0;
+            int shake_y = 0;
+            bn::fixed slice_gap = 0;
+            if(t >= 125)
+            {
+                if(t == 125) { events |= EV_BOOM | EV_SMASH; }
+                if(t == 138) { events |= EV_BOOM | EV_HIT; }
+
+                const int dt = t - 125;
+                const int pwr = dt < 36 ? (6 - dt * 6 / 36) : 0;
+                shake_x = (t % 2 == 0) ? pwr : -pwr;
+                shake_y = (t % 4 < 2) ? pwr : -pwr;
+                if(t <= 135) { set_flash(bn::fixed(135 - t) / 10); }
+
+                slice_gap = dt < 22 ? bn::fixed(dt) * bn::fixed(1.6) : bn::fixed(35);
+
+                // Explosion + diagonal slice rift flashes across the screen
+                _fs_impact->set_visible(dt < 36);
+                _fs_impact->set_tiles(bn::sprite_items::explosion.tiles_item(), (dt / 3) % 4);
+                _fs_impact->set_position(-24 + shake_x, 14 + shake_y);
+
+                for(int i = 1; i < 4; ++i)
+                {
+                    _fs_beam[i]->set_visible(dt < 26);
+                    _fs_beam[i]->set_position(-80 + (i - 1) * 76, 36 - (i - 1) * 32);
+                    _fs_beam[i]->set_tiles(bn::sprite_items::blue_slash.tiles_item(), (dt / 2 + i) % 3);
+                }
+                _fs_vic_pal->set_fade((t % 6 < 3) ? bn::color(31, 31, 31) : bn::color(4, 18, 31), 0.80);
+            }
+
+            const int vx = -24 - _fs_cam_x + shake_x - (slice_gap > 0 ? (slice_gap.integer() / 3) : 0);
+            _fs_vic->set_visible(vx > -150 && vx < 150);
+            _fs_vic->set_position(vx, 18 + shake_y + (slice_gap > 0 ? (slice_gap.integer() / 4) : 0));
+            _fs_vic->set_tiles(vic_def->sprite->tiles_item(), safe_frame(*vic_def->sprite, pick_frame(ST_HURT, -1, 0), sheet_frame(DIR_RIGHT, false)));
+
+            _fs_bg->set_position(136 - _fs_cam_x + shake_x, shake_y);
+            for(int r = 0; r < bn::display::height(); ++r)
+            {
+                if(slice_gap > 0)
+                {
+                    if(r < 78)
+                    {
+                        detail::fs_slice_x_buf[r] = -slice_gap;
+                        detail::fs_slice_y_buf[r] = -slice_gap / 3;
+                    }
+                    else if(r > 82)
+                    {
+                        detail::fs_slice_x_buf[r] = slice_gap;
+                        detail::fs_slice_y_buf[r] = slice_gap / 3;
+                    }
+                    else
+                    {
+                        detail::fs_slice_x_buf[r] = (r % 2 == 0) ? 120 : -120;
+                        detail::fs_slice_y_buf[r] = 0;
+                    }
+                }
+                else
+                {
+                    detail::fs_slice_x_buf[r] = 0;
+                    detail::fs_slice_y_buf[r] = 0;
+                }
+            }
+            _fs_slice_hbe_x->reload_deltas_ref();
+            _fs_slice_hbe_y->reload_deltas_ref();
+
+            if(t >= 172) { set_flash(bn::fixed(t - 172) / 12); }
+            if(t >= 184)
+            {
+                unload_fs_gfx();
+                _phase = PH_FS_EXIT;
+            }
+        }
+
+        // ---- FS_WAFFLE_MEAL cutscene: Waffles teleports around kitchen cooking -> throws meal to teammate ----
+        void build_waffle_meal_fs(bn::sprite_text_generator& text)
+        {
+            const FighterDef* atk_def = fighter_def(_fs_attacker);
+            const int vic_def_idx = (_fs_victim >= 3 && _fight.f[_fs_victim].clone_of >= 0) ? _fight.f[_fs_victim].clone_of : _fs_victim;
+            const FighterDef* vic_def = fighter_def(vic_def_idx);
+
+            _fs_bg = bn::regular_bg_items::kitchen_fs_bg.create_bg(0, 0);
+            _fs_bg->set_priority(3);
+
+            _fs_atk_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_atk_mat->set_scale(1.5);
+            _fs_atk_pal = bn::sprite_palette_ptr::create_new(atk_def->sprite->palette_item());
+            _fs_atk = atk_def->sprite->create_sprite(-72, 18, sheet_frame(DIR_RIGHT, false));
+            _fs_atk->set_bg_priority(0);
+            _fs_atk->set_z_order(-2);
+            _fs_atk->set_affine_mat(*_fs_atk_mat);
+            _fs_atk->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_atk->set_palette(*_fs_atk_pal);
+
+            _fs_vic_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_vic_mat->set_scale(1.5);
+            _fs_vic_pal = bn::sprite_palette_ptr::create_new(vic_def->sprite->palette_item());
+            if(_fs_victim >= 3) { _fs_vic_pal->set_fade(bn::color(4, 22, 31), 0.55); }
+            else if(_fs_victim == 2) { _fs_vic_pal->set_fade(bn::color(6, 12, 31), 0.35); }
+
+            _fs_vic = vic_def->sprite->create_sprite(76, 18, sheet_frame(DIR_LEFT, false));
+            _fs_vic->set_bg_priority(0);
+            _fs_vic->set_z_order(-1);
+            _fs_vic->set_affine_mat(*_fs_vic_mat);
+            _fs_vic->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_vic->set_palette(*_fs_vic_pal);
+
+            _fs_beam_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_beam_mat->set_scale(1.5);
+            _fs_impact = bn::sprite_items::mc_props.create_sprite(12, 2, 16);
+            _fs_impact->set_bg_priority(0);
+            _fs_impact->set_z_order(-3);
+            _fs_impact->set_affine_mat(*_fs_beam_mat);
+            _fs_impact->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_impact->set_visible(false);
+
+            _fs_spark = bn::sprite_items::hit_spark.create_sprite(-72, 14, 0);
+            _fs_spark->set_bg_priority(0);
+            _fs_spark->set_z_order(-4);
+            _fs_spark->set_visible(false);
+
+            for(int i = 0; i < 2; ++i)
+            {
+                _fs_aura[i] = bn::sprite_items::fire_aura.create_sprite(12, 0, i);
+                _fs_aura[i]->set_bg_priority(0);
+                _fs_aura[i]->set_z_order(-4);
+                _fs_aura[i]->set_visible(false);
+            }
+
+            text.set_center_alignment();
+            text.generate(0, -60, "CHEF WAFFLES!", _fs_banner);
+            for(bn::sprite_ptr& sp : _fs_banner) { sp.set_bg_priority(0); sp.set_z_order(-10); }
+        }
+
+        void update_waffle_meal_fs(bn::sprite_text_generator& text)
+        {
+            (void)text;
+            const FighterDef* atk_def = fighter_def(_fs_attacker);
+            const int vic_def_idx = (_fs_victim >= 3 && _fight.f[_fs_victim].clone_of >= 0) ? _fight.f[_fs_victim].clone_of : _fs_victim;
+            const FighterDef* vic_def = fighter_def(vic_def_idx);
+            const int t = _fs_timer++;
+
+            if(t <= 10) { set_flash(bn::fixed(10 - t) / 10); }
+            if(t == 28) { _fs_banner.clear(); }
+
+            if(t < 112)
+            {
+                static const int tp_x[8] = { -74, -28, 28, -22, 12, -62, 34, -14 };
+                static const int tp_y[8] = {  18,  18, 18,  10, 12,  18, 18,  18 };
+                static const int tp_d[8] = { DIR_RIGHT, DIR_RIGHT, DIR_LEFT, DIR_RIGHT, DIR_DOWN, DIR_RIGHT, DIR_LEFT, DIR_RIGHT };
+                const int step = (t / 14) % 8;
+                const int sub = t % 14;
+
+                if(sub == 0 && t > 0) { events |= EV_SWING; }
+                const int pose = sheet_frame(tp_d[step], true) + ((sub / 3) % 3);
+                _fs_atk->set_tiles(atk_def->sprite->tiles_item(), pose);
+                _fs_atk->set_position(tp_x[step], tp_y[step]);
+
+                if(sub < 8)
+                {
+                    _fs_spark->set_visible(true);
+                    _fs_spark->set_position(tp_x[step], tp_y[step] - 4);
+                    _fs_spark->set_tiles(bn::sprite_items::hit_spark.tiles_item(), sub * 3 / 8);
+                }
+                else { _fs_spark->set_visible(false); }
+
+                if(t >= 35)
+                {
+                    if(t == 35) { events |= EV_ABSORB; }
+                    _fs_impact->set_visible(true);
+                    _fs_impact->set_position(12, 2);
+                    for(int i = 0; i < 2; ++i)
+                    {
+                        _fs_aura[i]->set_visible(true);
+                        _fs_aura[i]->set_tiles(bn::sprite_items::fire_aura.tiles_item(), ((t / 4) + i) % 3);
+                        _fs_aura[i]->set_position(12 + (i == 0 ? -8 : 8), 0 - (t % 5));
+                    }
+                }
+                return;
+            }
+
+            if(t < 145)
+            {
+                if(t == 112)
+                {
+                    events |= EV_SHOT;
+                    _fs_spark->set_visible(false);
+                    for(int i = 0; i < 2; ++i) { _fs_aura[i]->set_visible(false); }
+                    _fs_atk->set_tiles(atk_def->sprite->tiles_item(), sheet_frame(DIR_RIGHT, true) + 2);
+                    _fs_atk->set_position(-14, 18);
+                }
+                const int dt = t - 112;
+                const int mx = 12 + dt * 64 / 33;
+                const int arc = (dt * (33 - dt)) / 10;
+                const int my = 2 - arc;
+                _fs_impact->set_visible(true);
+                _fs_impact->set_position(mx, my);
+                return;
+            }
+
+            if(t == 145)
+            {
+                _fs_impact->set_visible(false);
+                events |= EV_ABSORB | EV_SMASH;
+            }
+
+            const int dt = t - 145;
+            const int hop = (dt < 16) ? (dt < 8 ? dt * 2 : (16 - dt) * 2) : 0;
+            _fs_vic->set_position(76, 18 - hop);
+            _fs_vic->set_tiles(vic_def->sprite->tiles_item(), sheet_frame(DIR_LEFT, dt < 18));
+
+            const bn::fixed glow = dt < 24 ? (bn::fixed(24 - dt) * bn::fixed(0.03)) : bn::fixed(0);
+            _fs_vic_pal->set_fade(bn::color(10, 31, 18), glow);
+
+            if(dt < 14)
+            {
+                _fs_spark->set_visible(true);
+                _fs_spark->set_position(76, 10 - hop);
+                _fs_spark->set_tiles(bn::sprite_items::hit_spark.tiles_item(), dt * 3 / 14);
+            }
+            else { _fs_spark->set_visible(false); }
+
+            if(t >= 175) { set_flash(bn::fixed(t - 175) / 12); }
+            if(t >= 187)
+            {
+                unload_fs_gfx();
+                _phase = PH_FS_EXIT;
+            }
+        }
+
+        // ---- FS_UMB_MINECART cutscene: Enemy on minecart -> Pan left to Minecraft house -> Boom ----
+        void build_umb_fs(bn::sprite_text_generator& text)
+        {
+            const FighterDef* vic_def = fighter_def(_fs_victim);
+            _fs_cam_x = 0;
+
+            _fs_bg = bn::regular_bg_items::minecraft_fs_bg.create_bg(-136, 0);
+            _fs_bg->set_priority(3);
+
+            _fs_vic_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_vic_mat->set_scale(1.5);
+            _fs_vic_pal = bn::sprite_palette_ptr::create_new(vic_def->sprite->palette_item());
+            if(_fs_victim == 1)      { _fs_vic_pal->set_fade(bn::color(31, 6, 6), 0.35); }
+            else if(_fs_victim == 2) { _fs_vic_pal->set_fade(bn::color(6, 12, 31), 0.35); }
+
+            _fs_vic = vic_def->sprite->create_sprite(58, -8, safe_frame(*vic_def->sprite, pick_frame(ST_HURT, -1, 0), sheet_frame(DIR_LEFT, false)));
+            _fs_vic->set_bg_priority(0);
+            _fs_vic->set_z_order(-2);
+            _fs_vic->set_affine_mat(*_fs_vic_mat);
+            _fs_vic->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_vic->set_palette(*_fs_vic_pal);
+
+            _fs_cart_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_cart_mat->set_scale(1.5);
+            _fs_cart = bn::sprite_ptr::create(
+                bn::sprite_items::mc_rides.shape_size(),
+                bn::sprite_items::mc_rides.tiles_item().create_tiles(2),
+                bn::sprite_items::mc_props.palette_item().create_palette());
+            _fs_cart->set_position(58, 14);
+            _fs_cart->set_bg_priority(0);
+            _fs_cart->set_z_order(-3);
+            _fs_cart->set_affine_mat(*_fs_cart_mat);
+            _fs_cart->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+
+            _fs_beam_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_beam_mat->set_scale(1.85);
+            _fs_impact = bn::sprite_items::fire_impact.create_sprite(-24, 6, 0);
+            _fs_impact->set_bg_priority(0);
+            _fs_impact->set_z_order(-4);
+            _fs_impact->set_affine_mat(*_fs_beam_mat);
+            _fs_impact->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_impact->set_visible(false);
+
+            for(int i = 0; i < 4; ++i)
+            {
+                _fs_beam[i] = bn::sprite_items::explosion.create_sprite(-24, 6, 0);
+                _fs_beam[i]->set_bg_priority(0);
+                _fs_beam[i]->set_z_order(-5);
+                _fs_beam[i]->set_visible(false);
+            }
+
+            text.set_center_alignment();
+            text.generate(0, -58, "MINECART MAYHEM!", _fs_banner);
+            for(bn::sprite_ptr& sp : _fs_banner) { sp.set_bg_priority(0); sp.set_z_order(-10); }
+        }
+
+        void update_umb_fs(bn::sprite_text_generator& text)
+        {
+            (void)text;
+            const int t = _fs_timer++;
+
+            if(t <= 10) { set_flash(bn::fixed(10 - t) / 10); }
+            if(t == 28) { _fs_banner.clear(); }
+
+            int wx = 96;
+            if(t < 45)
+            {
+                _fs_cam_x = 0;
+                wx = 450 - t * 85 / 45;
+            }
+            else if(t < 120)
+            {
+                _fs_cam_x = (t - 45) * 272 / 75;
+                wx = 365 - (t - 45) * 195 / 75;
+            }
+            else
+            {
+                _fs_cam_x = 272;
+                wx = (t < 138) ? (170 - (t - 120) * 74 / 18) : 96;
+            }
+
+            const int sx = wx - 392 + _fs_cam_x;
+            if(t < 138)
+            {
+                const int jitter = (t % 4 < 2) ? -1 : 1;
+                _fs_vic->set_visible(sx > -155 && sx < 155);
+                _fs_vic->set_position(sx, -8 + jitter);
+                _fs_cart->set_visible(sx > -155 && sx < 155);
+                _fs_cart->set_position(sx, 14);
+                _fs_cart->set_tiles(bn::sprite_items::mc_rides.tiles_item(), 2 + (t / 3) % 2);
+            }
+            else if(t == 138)
+            {
+                _fs_vic->set_visible(false);
+                _fs_cart->set_visible(false);
+                events |= EV_SWING;
+            }
+
+            int shake_x = 0, shake_y = 0;
+            if(t >= 150)
+            {
+                if(t == 150) { events |= EV_BOOM | EV_SMASH; }
+                if(t == 165) { events |= EV_BOOM | EV_HIT; }
+
+                const int dt = t - 150;
+                const int pwr = dt < 45 ? (7 - dt * 7 / 45) : 0;
+                shake_x = (t % 2 == 0) ? pwr : -pwr;
+                shake_y = (t % 4 < 2) ? pwr : -pwr;
+
+                if(t <= 165) { set_flash(bn::fixed(165 - t) / 15); }
+
+                if(dt < 45)
+                {
+                    _fs_beam_mat->set_scale(bn::fixed(1.7) + bn::fixed(dt % 4) * bn::fixed(0.08));
+                    _fs_impact->set_visible(true);
+                    _fs_impact->set_tiles(bn::sprite_items::fire_impact.tiles_item(), (dt / 3) % 3);
+                    _fs_impact->set_position(-24 + shake_x, 6 + shake_y);
+
+                    static const int bx[4] = { -52, 4, -24, -24 };
+                    static const int by[4] = { 12, 12, -20, 22 };
+                    for(int i = 0; i < 4; ++i)
+                    {
+                        const int e_age = (dt + i * 3) % 16;
+                        _fs_beam[i]->set_visible(dt < 38);
+                        _fs_beam[i]->set_tiles(bn::sprite_items::explosion.tiles_item(), (e_age / 4) % 4);
+                        _fs_beam[i]->set_position(bx[i] + shake_x, by[i] + shake_y);
+                    }
+                }
+                else
+                {
+                    _fs_impact->set_visible(false);
+                    for(int i = 0; i < 4; ++i) { _fs_beam[i]->set_visible(false); }
+                }
+            }
+
+            _fs_bg->set_position(-136 + _fs_cam_x + shake_x, shake_y);
+
+            if(t >= 195) { set_flash(bn::fixed(t - 195) / 12); }
+            if(t >= 207)
+            {
+                unload_fs_gfx();
+                _phase = PH_FS_EXIT;
+            }
+        }
+
+        // ---- FS_FILIP_DROP cutscene: Ring -> Fence -> POV Lights -> Ring Explosion ----
+        void build_filip_fs(bn::sprite_text_generator& text)
+        {
+            const FighterDef* atk_def = fighter_def(_fs_attacker);
+            const FighterDef* vic_def = fighter_def(_fs_victim);
+
+            _fs_bg = bn::regular_bg_items::ring_bg.create_bg(136, 0);
+            _fs_bg->set_priority(3);
+
+            _fs_atk_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_atk_mat->set_scale(1.5);
+            _fs_atk_pal = bn::sprite_palette_ptr::create_new(atk_def->sprite->palette_item());
+            if(_fs_attacker == 1)      { _fs_atk_pal->set_fade(bn::color(31, 6, 6), 0.35); }
+            else if(_fs_attacker == 2) { _fs_atk_pal->set_fade(bn::color(6, 12, 31), 0.35); }
+
+            _fs_atk = atk_def->sprite->create_sprite(272, -34, sheet_frame(DIR_LEFT, false));
+            _fs_atk->set_bg_priority(0);
+            _fs_atk->set_z_order(-2);
+            _fs_atk->set_affine_mat(*_fs_atk_mat);
+            _fs_atk->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_atk->set_palette(*_fs_atk_pal);
+
+            _fs_vic_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_vic_mat->set_scale(1.5);
+            _fs_vic_pal = bn::sprite_palette_ptr::create_new(vic_def->sprite->palette_item());
+            if(_fs_victim == 1)      { _fs_vic_pal->set_fade(bn::color(31, 6, 6), 0.35); }
+            else if(_fs_victim == 2) { _fs_vic_pal->set_fade(bn::color(6, 12, 31), 0.35); }
+
+            _fs_vic = vic_def->sprite->create_sprite(0, -70, safe_frame(*vic_def->sprite, pick_frame(ST_HURT, -1, 0), sheet_frame(DIR_LEFT, false)));
+            _fs_vic->set_bg_priority(0);
+            _fs_vic->set_z_order(-1);
+            _fs_vic->set_affine_mat(*_fs_vic_mat);
+            _fs_vic->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_vic->set_palette(*_fs_vic_pal);
+
+            _fs_beam_mat = bn::sprite_affine_mat_ptr::create();
+            _fs_beam_mat->set_scale(1.85);
+            _fs_impact = bn::sprite_items::fire_impact.create_sprite(0, 26, 0);
+            _fs_impact->set_bg_priority(0);
+            _fs_impact->set_z_order(-3);
+            _fs_impact->set_affine_mat(*_fs_beam_mat);
+            _fs_impact->set_double_size_mode(bn::sprite_double_size_mode::ENABLED);
+            _fs_impact->set_visible(false);
+
+            for(int i = 0; i < 3; ++i)
+            {
+                _fs_beam[i] = bn::sprite_items::explosion.create_sprite(0, 26, 0);
+                _fs_beam[i]->set_bg_priority(0);
+                _fs_beam[i]->set_z_order(-4);
+                _fs_beam[i]->set_visible(false);
+            }
+
+            text.set_center_alignment();
+            text.generate(0, -58, "RING DROP!", _fs_banner);
+            for(bn::sprite_ptr& sp : _fs_banner) { sp.set_bg_priority(0); sp.set_z_order(-10); }
+        }
+
+        void update_filip_fs(bn::sprite_text_generator& text)
+        {
+            (void)text;
+            const FighterDef* atk_def = fighter_def(_fs_attacker);
+            const FighterDef* vic_def = fighter_def(_fs_victim);
+            const int t = _fs_timer++;
+
+            // ---- Scene 1 (0..68): Victim lands in ring -> camera pans to Filip on fence -> jumps high ----
+            if(t < 69)
+            {
+                if(t <= 10) { set_flash(bn::fixed(10 - t) / 10); }
+                if(t == 14) { events |= EV_HIT; _fs_banner.clear(); }
+
+                if(t >= 18 && t < 49)
+                {
+                    _fs_cam_x += 9;
+                    if(_fs_cam_x > 272) { _fs_cam_x = 272; }
+                }
+                _fs_bg->set_x(136 - _fs_cam_x);
+
+                int vy = 32;
+                if(t < 14)      { vy = -70 + t * 102 / 14; }
+                else if(t < 20) { vy = 32 - (t < 17 ? (t - 14) * 3 : (20 - t) * 3); }
+                const int vx = 0 - _fs_cam_x;
+                _fs_vic->set_position(vx, vy);
+                _fs_vic->set_visible(vx > -155);
+
+                const int ax = 272 - _fs_cam_x;
+                int ay = -34;
+                int apose = sheet_frame(DIR_LEFT, false);
+                if(t >= 49 && t < 55)
+                {
+                    ay = -32;
+                }
+                else if(t >= 55)
+                {
+                    if(t == 55) { events |= EV_JUMP; }
+                    ay = -34 - (t - 55) * 8;
+                    apose = sheet_frame(DIR_LEFT, true) + 1;
+                }
+                _fs_atk->set_tiles(atk_def->sprite->tiles_item(), apose);
+                _fs_atk->set_position(ax, ay);
+                _fs_atk->set_visible(ax < 155 && ay > -105);
+                return;
+            }
+
+            if(t == 69)
+            {
+                _fs_bg.reset();
+                _fs_vic->set_visible(false);
+                _fs_atk->set_visible(false);
+                set_flash(bn::fixed(0.65));
+                return;
+            }
+
+            // ---- Scene 2 (70..123): Victim's POV looking up at boxing lights; Filip slides top -> bottom ----
+            if(t == 70)
+            {
+                _fs_bg = bn::regular_bg_items::gym_lights_bg.create_bg(0, 0);
+                _fs_bg->set_priority(3);
+            }
+            if(t >= 70 && t < 124)
+            {
+                if(t <= 78) { set_flash(bn::fixed(78 - t) * bn::fixed(0.65) / 8); }
+                if(t == 84) { events |= EV_SWING; }
+
+                const int dt = t - 70;
+                const int sy = -92 + dt * 188 / 53;
+                const bn::fixed sc = bn::fixed(0.75) + bn::fixed(dt) * bn::fixed(1.15) / 53;
+                _fs_atk_mat->set_scale(sc);
+                _fs_atk->set_tiles(atk_def->sprite->tiles_item(), sheet_frame(DIR_DOWN, true) + 1);
+                _fs_atk->set_position(0, sy);
+                _fs_atk->set_visible(true);
+                _fs_bg->set_position(0, (t % 4 < 2) ? 0 : 1);
+                return;
+            }
+
+            if(t == 124)
+            {
+                _fs_bg.reset();
+                _fs_atk->set_visible(false);
+                set_flash(bn::fixed(0.65));
+                return;
+            }
+
+            // ---- Scene 3 (125..195): Filip lands on victim in ring -> MASSIVE EXPLOSION ----
+            if(t == 125)
+            {
+                _fs_cam_x = 0;
+                _fs_bg = bn::regular_bg_items::ring_bg.create_bg(136, 0);
+                _fs_bg->set_priority(3);
+                _fs_atk_mat->set_scale(1.5);
+                _fs_atk->set_tiles(atk_def->sprite->tiles_item(), sheet_frame(DIR_DOWN, true) + 1);
+                _fs_vic->set_tiles(vic_def->sprite->tiles_item(), safe_frame(*vic_def->sprite, pick_frame(ST_HURT, -1, 0), sheet_frame(DIR_LEFT, false)));
+                _fs_vic->set_visible(true);
+            }
+
+            int shake_x = 0, shake_y = 0;
+            if(t < 137)
+            {
+                if(t <= 132) { set_flash(bn::fixed(132 - t) * bn::fixed(0.65) / 7); }
+                const int ay = -86 + (t - 125) * 116 / 12;
+                _fs_atk->set_position(0, ay);
+                _fs_atk->set_visible(true);
+                _fs_vic->set_position(0, 32);
+            }
+            else
+            {
+                if(t == 137) { events |= EV_BOOM | EV_SMASH; }
+                if(t == 149) { events |= EV_BOOM | EV_HIT; }
+
+                const int dt = t - 137;
+                const int pwr = dt < 45 ? (7 - dt * 7 / 45) : 0;
+                shake_x = (t % 2 == 0) ? pwr : -pwr;
+                shake_y = (t % 4 < 2) ? pwr : -pwr;
+
+                if(t <= 152) { set_flash(bn::fixed(152 - t) / 15); }
+
+                _fs_atk->set_tiles(atk_def->sprite->tiles_item(), sheet_frame(DIR_DOWN, false));
+                _fs_atk->set_position(shake_x, 26 + shake_y);
+                _fs_vic->set_position(shake_x, 32 + shake_y);
+                _fs_vic_pal->set_fade((t % 6 < 3) ? bn::color(31, 31, 31) : bn::color(31, 14, 0), 0.75);
+
+                if(dt < 40)
+                {
+                    const bn::fixed imp_scale = bn::fixed(1.65) + bn::fixed(dt % 4) * bn::fixed(0.08);
+                    _fs_beam_mat->set_scale(imp_scale);
+                    _fs_impact->set_visible(true);
+                    _fs_impact->set_tiles(bn::sprite_items::fire_impact.tiles_item(), (dt / 3) % 3);
+                    _fs_impact->set_position(shake_x, 22 + shake_y);
+
+                    static const int bx[3] = { -28, 28, 0 };
+                    static const int by[3] = { 28, 28, -4 };
+                    for(int i = 0; i < 3; ++i)
+                    {
+                        const int e_age = (dt + i * 3) % 16;
+                        _fs_beam[i]->set_visible(dt < 34);
+                        _fs_beam[i]->set_tiles(bn::sprite_items::explosion.tiles_item(), (e_age / 4) % 4);
+                        _fs_beam[i]->set_position(bx[i] + shake_x, by[i] + shake_y);
+                    }
+                }
+                else
+                {
+                    _fs_impact->set_visible(false);
+                    for(int i = 0; i < 3; ++i) { _fs_beam[i]->set_visible(false); }
+                }
+            }
+            _fs_bg->set_position(136 + shake_x, shake_y);
+
+            if(t >= 183)
+            {
+                set_flash(bn::fixed(t - 183) / 12);
+            }
+            if(t >= 195)
+            {
+                unload_fs_gfx();
+                _phase = PH_FS_EXIT;
             }
         }
 
@@ -1299,7 +2272,7 @@ namespace battle
             if(_fs_victim == 1)      { _fs_vic_pal->set_fade(bn::color(31, 6, 6), 0.35); }
             else if(_fs_victim == 2) { _fs_vic_pal->set_fade(bn::color(6, 12, 31), 0.35); }
 
-            _fs_vic = vic_def->sprite->create_sprite(-30, 18, pick_frame(ST_HURT, -1, 0));
+            _fs_vic = vic_def->sprite->create_sprite(-30, 18, safe_frame(*vic_def->sprite, pick_frame(ST_HURT, -1, 0), sheet_frame(DIR_LEFT, false)));
             _fs_vic->set_bg_priority(0);
             _fs_vic->set_z_order(-1);
             _fs_vic->set_affine_mat(*_fs_vic_mat);
@@ -1348,7 +2321,7 @@ namespace battle
             if(t < 20)
             {
                 _fs_bg->set_x(-t * 2);
-                const int pose = attack_frame(ANIM_TAIL_UP, 1, DIR_RIGHT, t * 2);
+                const int pose = safe_frame(*atk_def->sprite, attack_frame(ANIM_TAIL_UP, 1, DIR_RIGHT, t * 2), sheet_frame(DIR_RIGHT, true) + 2);
                 _fs_atk->set_tiles(atk_def->sprite->tiles_item(), pose);
                 const int hop = (t < 8) ? -t : -(16 - t);
                 _fs_atk->set_position(-55, 18 + (hop < 0 ? hop : 0));
@@ -1362,7 +2335,7 @@ namespace battle
 
                 const int vx = -30 + t * 11;
                 const int vy = 18 - t * 6;
-                _fs_vic->set_tiles(vic_def->sprite->tiles_item(), pick_frame(ST_HURT, -1, 0));
+                _fs_vic->set_tiles(vic_def->sprite->tiles_item(), safe_frame(*vic_def->sprite, pick_frame(ST_HURT, -1, 0), sheet_frame(DIR_LEFT, false)));
                 _fs_vic->set_position(vx, vy);
                 _fs_vic->set_visible(vx < 155 && vy > -105);
                 return;
@@ -1456,7 +2429,7 @@ namespace battle
             if(t >= 143 && t < 198)
             {
                 if(t == 145 || t == 157 || t == 169 || t == 181) { events |= EV_HIT; }
-                _fs_vic->set_tiles(vic_def->sprite->tiles_item(), pick_frame(ST_HURT, -1, 0));
+                _fs_vic->set_tiles(vic_def->sprite->tiles_item(), safe_frame(*vic_def->sprite, pick_frame(ST_HURT, -1, 0), sheet_frame(DIR_LEFT, false)));
                 _fs_vic_pal->set_fade((t % 6 < 3) ? bn::color(31, 31, 31) : bn::color(31, 14, 0), 0.75);
                 _fs_impact->set_visible(true);
                 _fs_impact->set_tiles(bn::sprite_items::fire_impact.tiles_item(), (t / 3) % 3);
@@ -1485,6 +2458,24 @@ namespace battle
         {
             const int length = _stage->geom.length;
             if(length <= 240) { return length / 2; }
+            if(_fight.fs_combo_active)
+            {
+                if(_fight.fs_combo_tick >= 33 && _fight.fs_combo_tick <= 92)
+                {
+                    int tx = _fight.fs_combo_home_x;
+                    if(tx < 120) { tx = 120; }
+                    if(tx > length - 120) { tx = length - 120; }
+                    return tx;
+                }
+                return length / 2;
+            }
+            if(_fight.fs_freeze_timer > 0 && _fight.fs_freeze_user >= 0)
+            {
+                int tx = _fight.f[_fight.fs_freeze_user].x16 / FP;
+                if(tx < 120) { tx = 120; }
+                if(tx > length - 120) { tx = length - 120; }
+                return tx;
+            }
 
             int middle = (_fight.f[0].x16 + _fight.f[1].x16) / (2 * FP);
             if(middle < 120) { middle = 120; }
@@ -1523,9 +2514,113 @@ namespace battle
 
             draw_bystander(cam);
 
-            for(int i = 0; i < 3; ++i)
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
             {
-                if(_views[i]) { draw_fighter(i, *_views[i], _fight.f[i], cam, text); }
+                const Fighter& f = _fight.f[i];
+                if(f.active && f.has_table)
+                {
+                    if(!_table_sprites[i])
+                    {
+                        _table_sprites[i] = bn::sprite_items::mc_props.create_sprite(0, 0, 0);
+                        _table_sprites[i]->set_bg_priority(0);
+                        _table_sprites[i]->set_z_order(8);
+                    }
+                    _table_sprites[i]->set_position(bn::fixed(f.table_x16 / FP) - cam, (f.table_y16 / FP) - 8 - 80);
+                }
+                else { _table_sprites[i].reset(); }
+            }
+
+            for(int k = 0; k < MAX_BLOCKS; ++k)
+            {
+                const PlacedBlock& b = _fight.blocks[k];
+                if(b.active)
+                {
+                    if(!_block_sprites[k])
+                    {
+                        _block_sprites[k] = bn::sprite_items::mc_props.create_sprite(0, 0, 1);
+                        _block_sprites[k]->set_bg_priority(0);
+                        _block_sprites[k]->set_z_order(9);
+                    }
+                    _block_sprites[k]->set_position(bn::fixed(b.x + b.w / 2) - cam, b.y + 8 - 80);
+                    _block_sprites[k]->set_visible(b.life > 45 || (b.life / 4) % 2 == 0);
+                }
+                else { _block_sprites[k].reset(); }
+            }
+
+            for(int i = 3; i < MAX_FIGHTERS; ++i)
+            {
+                const Fighter& cf = _fight.f[i];
+                if(cf.active && cf.state != ST_KO)
+                {
+                    if(!_views[i] && cf.clone_of >= 0)
+                    {
+                        const FighterDef* cdef = (cf.clone_of == 100 && _waffle_def) ? _waffle_def : fighter_def(cf.clone_of);
+                        const int ctint = (cf.clone_of == 100) ? 3 : 2;
+                        _views[i] = FighterView(*cdef, Fight::team_of(i) == 1, "", text, false, ctint, true);
+                    }
+                }
+                else { _views[i].reset(); }
+            }
+
+            bool show_chg = false;
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
+            {
+                if(_views[i] && _fight.f[i].active)
+                {
+                    draw_fighter(i, *_views[i], _fight.f[i], cam, text);
+                    const Fighter& f = _fight.f[i];
+                    if(!show_chg && !f.is_clone && f.state == ST_ATTACK && f.move && (f.move->charges_clone || (f.move->charges_power && f.move_frame >= 10)) && !_ko_overlay_hidden)
+                    {
+                        show_chg = true;
+                        if(!_chg_back)
+                        {
+                            _chg_mat = bn::sprite_affine_mat_ptr::create();
+                            _chg_back = bn::sprite_items::hp_bar.create_sprite(0, 0, 0);
+                            _chg_back->set_bg_priority(0);
+                            _chg_back->set_z_order(-9);
+                            _chg_fill = bn::sprite_items::hp_bar.create_sprite(0, 0, 1);
+                            _chg_fill->set_bg_priority(0);
+                            _chg_fill->set_z_order(-10);
+                            _chg_fill->set_affine_mat(*_chg_mat);
+                        }
+                        const bn::fixed cx = bn::fixed(f.x16 / FP) - cam;
+                        const bn::fixed cy = (f.y16 / FP) - f.stats->body_h - 10 - 80;
+                        const int cur_chg = f.move->charges_power ? f.har_charge : f.clone_charge;
+                        const int max_chg = f.move->charges_power ? HAR_CHARGE_MAX : CLONE_CHARGE_MAX;
+                        bn::fixed ratio = bn::fixed(cur_chg) / max_chg;
+                        if(ratio < bn::fixed(0.04)) { ratio = bn::fixed(0.04); }
+                        if(ratio > 1) { ratio = 1; }
+                        _chg_mat->set_horizontal_scale(ratio);
+                        _chg_back->set_position(cx, cy);
+                        _chg_fill->set_position(cx - 16 + bn::fixed(16) * ratio, cy);
+                    }
+                }
+            }
+            if(!show_chg) { _chg_back.reset(); _chg_fill.reset(); _chg_mat.reset(); }
+
+            if(_fight.fs_freeze_timer > 0 && _fight.fs_freeze_user >= 0 && !_ko_overlay_hidden)
+            {
+                const Fighter& u = _fight.f[_fight.fs_freeze_user];
+                const int ux = u.x16 / FP;
+                const int uy = u.y16 / FP;
+                const int elapsed = FS_FREEZE_FRAMES - _fight.fs_freeze_timer;
+                for(int i = 0; i < 2; ++i)
+                {
+                    const int frame = (elapsed / 3 + i) % 3;
+                    if(!_freeze_aura[i])
+                    {
+                        _freeze_aura[i] = bn::sprite_items::fire_aura.create_sprite(0, 0, frame);
+                        _freeze_aura[i]->set_bg_priority(0);
+                        _freeze_aura[i]->set_z_order(i == 0 ? 1 : -2);
+                    }
+                    _freeze_aura[i]->set_tiles(bn::sprite_items::fire_aura.tiles_item(), frame);
+                    _freeze_aura[i]->set_position(bn::fixed(ux + (i == 0 ? -7 : 7)) - cam, uy - 14 - 80);
+                }
+            }
+            else
+            {
+                _freeze_aura[0].reset();
+                _freeze_aura[1].reset();
             }
 
             for(int k = 0; k < MAX_PROJECTILES; ++k)
@@ -1561,30 +2656,49 @@ namespace battle
                 if(!_proj[k] || _proj_id[k] != p.id)
                 {
                     _proj_id[k] = p.id;
-                    _proj[k] = art.item->create_sprite(0, 0, art.first);
+                    if(art.item == &bn::sprite_items::mc_rides)
+                    {
+                        _proj[k] = bn::sprite_ptr::create(
+                            bn::sprite_items::mc_rides.shape_size(),
+                            bn::sprite_items::mc_rides.tiles_item().create_tiles(art.first),
+                            bn::sprite_items::mc_props.palette_item().create_palette());
+                    }
+                    else
+                    {
+                        _proj[k] = art.item->create_sprite(0, 0, art.first);
+                    }
                     _proj[k]->set_bg_priority(0);
                     _proj[k]->set_z_order(-2);
                 }
                 _proj[k]->set_position(bn::fixed(p.x16 / FP) - cam, (p.y16 / FP) - 80);
                 _proj[k]->set_horizontal_flip(p.vx < 0);
-                _proj[k]->set_tiles(art.item->tiles_item(), art.first + (p.age / art.ticks) % art.frames);
+                const int art_frame = (p.shot.kind == PROJ_ARROW) ? (p.vy > 0 ? 1 : 0)
+                                    : (p.shot.kind == PROJ_TNT)   ? ((p.vx == 0 && p.age >= TNT_ARM_FRAMES && (p.age % 24 < 6)) ? 1 : 0)
+                                    : (p.age / art.ticks) % art.frames;
+                _proj[k]->set_tiles(art.item->tiles_item(), art.first + art_frame);
             }
 
-            // hit sparks (the sheet has 3 pictures; they play once over the effect's life)
+            // hit sparks & harmless dust puffs
             for(int k = 0; k < MAX_EFFECTS; ++k)
             {
                 const Effect& e = _fight.fx[k];
-                if(!e.active) { _fx[k].reset(); continue; }
+                if(!e.active) { _fx[k].reset(); _fx_kind[k] = -1; continue; }
 
-                const int frame = e.age * 3 / e.life;
-                if(!_fx[k])
+                const bool is_dust = (e.kind == FX_DUST);
+                const bn::sprite_item& item = is_dust ? bn::sprite_items::mc_props : bn::sprite_items::hit_spark;
+                const int first = is_dust ? 12 : 0;
+                const int total = is_dust ? 4 : 3;
+                int frame = e.age * total / e.life;
+                if(frame >= total) { frame = total - 1; }
+                if(!_fx[k] || _fx_kind[k] != e.kind)
                 {
-                    _fx[k] = bn::sprite_items::hit_spark.create_sprite(0, 0, frame);
+                    _fx_kind[k] = e.kind;
+                    _fx[k] = item.create_sprite(0, 0, first + frame);
                     _fx[k]->set_bg_priority(0);
                     _fx[k]->set_z_order(-5);
                 }
                 _fx[k]->set_position(bn::fixed(e.x16 / FP) - cam, (e.y16 / FP) - 80);
-                _fx[k]->set_tiles(bn::sprite_items::hit_spark.tiles_item(), frame);
+                _fx[k]->set_tiles(item.tiles_item(), first + frame);
             }
         }
         // fills the per-row start positions for the camera: the camera is the picture position that sits at the screen centre
@@ -1594,7 +2708,7 @@ namespace battle
             const int cam_texels = cam.data() >> 4;               // 12 fractional bits -> the 8 the hardware uses
             for(int row = front - FLOOR_ROWS; row < front; ++row)
             {
-                _floor_dx[row] = cam_texels - _floor_pa[row] * 120;   // 120 = half the screen width
+                detail::floor_dx_buf[row] = cam_texels - detail::floor_pa_buf[row] * 120;   // 120 = half the screen width
             }
         }
 
@@ -1640,7 +2754,24 @@ namespace battle
             const int fx = f.x16 / FP;
             const int fy = f.y16 / FP;
 
-            v.sprite.set_position(bn::fixed(fx) - cam, fy - SPRITE_FEET - 80);
+            const int ride_lift = f.on_pig ? 8 : 0;
+            v.sprite.set_position(bn::fixed(fx) - cam, fy - SPRITE_FEET - ride_lift - 80);
+            if(f.on_pig)
+            {
+                if(!v.pig)
+                {
+                    v.pig = bn::sprite_ptr::create(
+                        bn::sprite_items::mc_rides.shape_size(),
+                        bn::sprite_items::mc_rides.tiles_item().create_tiles(0),
+                        bn::sprite_items::mc_props.palette_item().create_palette());
+                    v.pig->set_bg_priority(0);
+                    v.pig->set_z_order(0);
+                }
+                v.pig->set_tiles(bn::sprite_items::mc_rides.tiles_item(), (_fight.frame / 5) % 2);
+                v.pig->set_position(bn::fixed(fx) - cam, fy - 8 - 80);
+                v.pig->set_horizontal_flip(f.facing < 0);
+            }
+            else { v.pig.reset(); }
 
             // animation: the walk cycle advances while walking
             if(f.state == ST_WALK)
@@ -1649,7 +2780,17 @@ namespace battle
             }
             else { v.step = 0; v.anim_timer = 0; }
 
-            const int frame = pick_frame(f.state, f.facing, v.step, f.move ? f.move->anim : ANIM_STAND, f.move_frame);
+            const int side = f.facing > 0 ? DIR_RIGHT : DIR_LEFT;
+            int anim = f.move ? f.move->anim : ANIM_STAND;
+            if(f.stats->spawns_crafting_table && f.weapon_tier == 0 &&
+               (anim == ANIM_UMB_MINE || anim == ANIM_UMB_SLASH))
+            {
+                anim = ANIM_UMB_PLACE;
+            }
+            const int raw_frame = f.on_pig ? sheet_frame(side, false)
+                                           : pick_frame(f.state, f.facing, v.step, anim, f.move_frame);
+            const int fallback = sheet_frame(side, f.state == ST_ATTACK) + (f.state == ST_ATTACK ? 2 : 0);
+            const int frame = safe_frame(*v.sheet, raw_frame, fallback);
             if(frame != v.shown_frame)                                  // only touch the graphics when the frame changes
             {
                 v.shown_frame = frame;
@@ -1660,27 +2801,29 @@ namespace battle
             // the shield bubble shrinks as its energy (= its defense boost) runs down
             // (fox thief borrows the same bubble while it is ready to steal a shot)
             const Move* move = f.state == ST_ATTACK ? f.move : nullptr;
-            const bool stealing = move && move->absorb_end > move->absorb_start &&
-                                  f.move_frame >= move->absorb_start && f.move_frame < move->absorb_end;
-            if(f.state == ST_SHIELD)
+            const bool stealing = move && ((move->absorb_end > move->absorb_start && f.move_frame >= move->absorb_start && f.move_frame < move->absorb_end) ||
+                                          (move->reflect_end > move->reflect_start && f.move_frame >= move->reflect_start && f.move_frame < move->reflect_end));
+            if(f.state == ST_SHIELD || stealing)
             {
-                const bn::fixed scale = bn::fixed(0.45) + bn::fixed(0.55) * f.shield / SHIELD_MAX;
+                if(!v.shield)
+                {
+                    v.shield = bn::sprite_items::shield.create_sprite(0, 0);
+                    v.shield->set_bg_priority(0);
+                    v.shield->set_z_order(-3);
+                    v.shield->set_affine_mat(v.shield_mat);
+                }
+                const bn::fixed scale = (f.state == ST_SHIELD)
+                    ? (bn::fixed(0.45) + bn::fixed(0.55) * f.shield / SHIELD_MAX)
+                    : bn::fixed(0.9);
                 v.shield_mat.set_scale(scale);
-                v.shield.set_position(bn::fixed(fx) - cam, fy - s.body_h / 2 - 80);
-                v.shield.set_visible(true);
+                v.shield->set_position(bn::fixed(fx) - cam, fy - s.body_h / 2 - 80);
             }
-            else if(stealing)
-            {
-                v.shield_mat.set_scale(bn::fixed(0.9));
-                v.shield.set_position(bn::fixed(fx) - cam, fy - s.body_h / 2 - 80);
-                v.shield.set_visible(true);
-            }
-            else { v.shield.set_visible(false); }
+            else { v.shield.reset(); }
 
             draw_move_effects(index, v, f, move, cam);
 
             // the health bar: the green part is squeezed from the right
-            if(f.hp != v.shown_hp)
+            if(!v.is_clone && f.hp != v.shown_hp)
             {
                 v.shown_hp = f.hp;
 
@@ -1699,18 +2842,78 @@ namespace battle
                 text.set_center_alignment();
             }
 
+            if(f.stats->spawns_crafting_table &&
+               (f.materials != v.shown_mat || f.weapon_tier != v.shown_tier || f.weapon_dur != v.shown_dur))
+            {
+                v.shown_mat = f.materials;
+                v.shown_tier = f.weapon_tier;
+                v.shown_dur = f.weapon_dur;
+                v.craft_text.clear();
+                char buf[20];
+                int pos = 0;
+                buf[pos++] = 'M';
+                buf[pos++] = ':';
+                if(f.materials >= 10) { buf[pos++] = char('0' + f.materials / 10); }
+                buf[pos++] = char('0' + f.materials % 10);
+                if(f.weapon_tier > 0)
+                {
+                    const char* tag = (f.weapon_tier >= 4) ? " DM:" :
+                                      (f.weapon_tier == 3) ? " IR:" :
+                                      (f.weapon_tier == 2) ? " ST:" : " WD:";
+                    for(int k = 0; k < 4; ++k) { buf[pos++] = tag[k]; }
+                    if(f.weapon_dur >= 10) { buf[pos++] = char('0' + f.weapon_dur / 10); }
+                    buf[pos++] = char('0' + f.weapon_dur % 10);
+                }
+                buf[pos] = 0;
+                if(v.on_right) { text.set_right_alignment(); text.generate(112, -46, buf, v.craft_text); }
+                else           { text.set_left_alignment();  text.generate(-112, -46 + v.hud_dy, buf, v.craft_text); }
+                text.set_center_alignment();
+            }
+
             if(v.pal)
             {
-                if(f.stats->final_smash_move != nullptr && f.smash >= SMASH_MAX && f.state != ST_KO)
+                if(_fight.fs_freeze_timer > 0 && index == _fight.fs_freeze_user)
+                {
+                    const int pulse = _fight.fs_freeze_timer % 8;
+                    const int tri = pulse < 4 ? pulse : 8 - pulse;
+                    v.pal->set_fade(bn::color(31, 26, 10), bn::fixed(0.45) + bn::fixed(tri) * bn::fixed(0.08));
+                }
+                else if(f.stats->final_smash_move != nullptr && f.smash >= SMASH_MAX && f.state != ST_KO)
                 {
                     const int pulse = _fight.frame % 24;
                     const int tri = pulse < 12 ? pulse : 24 - pulse;
                     const bn::fixed glow = bn::fixed(0.20) + bn::fixed(tri) * bn::fixed(0.045);
                     v.pal->set_fade(bn::color(31, 22, 4), glow);
                 }
+                else if(f.har_power_timer > 0)
+                {
+                    const int pulse = _fight.frame % 16;
+                    const int tri = pulse < 8 ? pulse : 16 - pulse;
+                    v.pal->set_fade(bn::color(4, 16, 31), bn::fixed(0.20) + bn::fixed(tri) * bn::fixed(0.06));
+                }
                 else if(v.tint_mode == 1)
                 {
                     v.pal->set_fade(bn::color(31, 6, 6), bn::fixed(0.35));
+                }
+                else if(f.state == ST_ATTACK && f.move && f.move->charges_clone)
+                {
+                    const int pulse = _fight.frame % 12;
+                    const int tri = pulse < 6 ? pulse : 12 - pulse;
+                    v.pal->set_fade(bn::color(6, 24, 31), bn::fixed(0.25) + bn::fixed(tri) * bn::fixed(0.07));
+                }
+                else if(v.tint_mode == 3)
+                {
+                    v.pal->set_fade(bn::color(4, 22, 31), bn::fixed(0.55));
+                }
+                else if(f.bomb_timer > 0 && (f.bomb_timer < 40 ? (_fight.frame % 6 < 3) : (_fight.frame % 16 < 4)))
+                {
+                    v.pal->set_fade(bn::color(31, 10, 2), bn::fixed(0.65));
+                }
+                else if(f.def_buff_timer > 0)
+                {
+                    const int pulse = _fight.frame % 20;
+                    const int tri = pulse < 10 ? pulse : 20 - pulse;
+                    v.pal->set_fade(bn::color(10, 30, 18), bn::fixed(0.20) + bn::fixed(tri) * bn::fixed(0.03));
                 }
                 else if(v.tint_mode == 2)
                 {
@@ -1748,9 +2951,48 @@ namespace battle
             }
             else { v.jet.reset(); }
 
+            // Harue 64x64 sword overlay + blue slashing effect
+            int sword_idx = -1;
+            int blue_idx = -1;
+            bool sword_left = (f.facing < 0);
+            if(move)
+            {
+                bool spin_left_half = false;
+                const int step = har_slash_step(move->anim, f.move_frame, spin_left_half);
+                if(step >= 0)
+                {
+                    sword_left = (move->anim == ANIM_HAR_SPIN) ? spin_left_half : (f.facing < 0);
+                    sword_idx = step;
+                    blue_idx = step;
+                }
+            }
+            if(sword_idx >= 0)
+            {
+                if(!v.sword)
+                {
+                    v.sword = bn::sprite_items::harueslice_sword.create_sprite(0, 0, sword_idx);
+                    v.sword->set_bg_priority(0);
+                    v.sword->set_z_order(-4);
+                }
+                v.sword->set_tiles(bn::sprite_items::harueslice_sword.tiles_item(), sword_idx);
+                v.sword->set_position(bn::fixed(fx) - cam, fy - SPRITE_FEET - 80);
+                v.sword->set_horizontal_flip(sword_left);
+
+                if(!v.slash_fx)
+                {
+                    v.slash_fx = bn::sprite_items::blue_slash.create_sprite(0, 0, blue_idx);
+                    v.slash_fx->set_bg_priority(0);
+                    v.slash_fx->set_z_order(-3);
+                }
+                v.slash_fx->set_tiles(bn::sprite_items::blue_slash.tiles_item(), blue_idx);
+                v.slash_fx->set_position(bn::fixed(fx) + (sword_left ? -8 : 8) - cam, fy - SPRITE_FEET - 80);
+                v.slash_fx->set_horizontal_flip(sword_left);
+            }
+            else { v.sword.reset(); v.sword_mat.reset(); v.slash_fx.reset(); }
+
             // swipes: until you draw real attack animations, a little slash shows where each melee hitbox is
             int used = 0;
-            if(move && move->drive.end <= move->drive.start)
+            if(move && move->drive.end <= move->drive.start && sword_idx < 0)
             {
                 for(int k = 0; k < move->hit_count && used < 2; ++k)
                 {
@@ -1782,7 +3024,17 @@ namespace battle
                 if(!v.held || v.held_kind != f.stored.kind)
                 {
                     v.held_kind = f.stored.kind;
-                    v.held = art.item->create_sprite(0, 0, art.first);
+                    if(art.item == &bn::sprite_items::mc_rides)
+                    {
+                        v.held = bn::sprite_ptr::create(
+                            bn::sprite_items::mc_rides.shape_size(),
+                            bn::sprite_items::mc_rides.tiles_item().create_tiles(art.first),
+                            bn::sprite_items::mc_props.palette_item().create_palette());
+                    }
+                    else
+                    {
+                        v.held = art.item->create_sprite(0, 0, art.first);
+                    }
                     v.held->set_bg_priority(0);
                     v.held->set_z_order(-6);
                 }
@@ -1813,7 +3065,9 @@ namespace battle
         const FighterDef* _player = nullptr;
         const FighterDef* _enemy = nullptr;
         const FighterDef* _partner = nullptr;
+        const FighterDef* _waffle_def = nullptr;
         FighterStats _player_stats = {};                // the player's stats WITH the buff on top
+        FighterStats _enemy_stats = {};                 // enemy's stats (doubled HP in 2v1 battles)
         Fight _fight;
 
         bn::optional<bn::regular_bg_ptr> _bgs[3];
@@ -1821,9 +3075,6 @@ namespace battle
         bn::optional<bn::affine_bg_pa_register_hbe_ptr> _floor_pa_hbe;
         bn::optional<bn::affine_bg_dx_register_hbe_ptr> _floor_dx_hbe;
         bn::optional<bn::affine_bg_dy_register_hbe_ptr> _floor_dy_hbe;
-        int16_t _floor_pa[bn::display::height()] = {};   // horizontal zoom of each screen row
-        int _floor_dx[bn::display::height()] = {};       // where each row starts in the picture (moves with the camera)
-        int _floor_dy[bn::display::height()] = {};       // how far "into" the picture each row looks
         bn::vector<bn::sprite_ptr, FLOOR_TILES> _floor;
         bn::vector<Piece, 24> _pieces;
         bn::vector<bn::sprite_ptr, 8> _label[MAX_PROJECTILES];      // the letters of a shot that is shown as text
@@ -1834,10 +3085,11 @@ namespace battle
         int _by_x16 = 0, _by_dir = DIR_DOWN, _by_timer = 0, _by_step = 0, _by_anim = 0, _by_shown = -1;
         bool _by_walking = false;
         unsigned _by_rng = 1;
-        bn::optional<FighterView> _views[3];            // 0 = you, 1 = the opponent, 2 = your partner
+        bn::optional<FighterView> _views[MAX_FIGHTERS]; // 0 = P1, 1 = P2/foe, 2 = partner, 3..4 = water clones
         bn::optional<bn::sprite_ptr> _proj[MAX_PROJECTILES];
         int _proj_id[MAX_PROJECTILES] = {};
         bn::optional<bn::sprite_ptr> _fx[MAX_EFFECTS];
+        int _fx_kind[MAX_EFFECTS] = {};
         bn::vector<bn::sprite_ptr, 12> _blocks;
         bn::vector<bn::sprite_ptr, 12> _banner;
 
@@ -1848,6 +3100,8 @@ namespace battle
         int _fs_cam_x = 0;
         int _fs_flash = 0;
         bn::optional<bn::regular_bg_ptr> _fs_bg;
+        bn::optional<bn::regular_bg_position_hbe_ptr> _fs_slice_hbe_x;
+        bn::optional<bn::regular_bg_position_hbe_ptr> _fs_slice_hbe_y;
         bn::optional<bn::regular_bg_ptr> _ko_bg;
         bool _ko_overlay_hidden = false;
         bn::optional<bn::sprite_ptr> _fs_atk;
@@ -1865,7 +3119,15 @@ namespace battle
         bool _debug_enabled = false;
         int _dbg_cursor = 0;
         bn::vector<bn::sprite_ptr, 6> _dbg_box;
-        bn::vector<bn::sprite_ptr, 48> _dbg_text;
+        bn::vector<bn::sprite_ptr, 64> _dbg_text;
+        bn::optional<bn::sprite_ptr> _table_sprites[MAX_FIGHTERS];
+        bn::optional<bn::sprite_ptr> _chg_back;
+        bn::optional<bn::sprite_ptr> _chg_fill;
+        bn::optional<bn::sprite_affine_mat_ptr> _chg_mat;
+        bn::optional<bn::sprite_ptr> _block_sprites[MAX_BLOCKS];
+        bn::optional<bn::sprite_ptr> _fs_cart;
+        bn::optional<bn::sprite_affine_mat_ptr> _fs_cart_mat;
+        bn::optional<bn::sprite_ptr> _freeze_aura[2];
         net::LinkSession* _net = nullptr;
         int _local_idx = 0;
         int _net_frame = 0;
@@ -1873,9 +3135,20 @@ namespace battle
         int _net_ev_send = 0;
         int _net_ev_pkt = 0;
         int _net_fs_seq = 0;
+        bool _desync_shown = false;
+        bool _net_clone_prev[2] = {};
+        int _net_clone_burst[2] = {};
+
+        // Link battles, on frames where the sim is not running: keep talking to the peer
+        void pump_net()
+        {
+            bn::link::send(_net->ls.next_packet(true));
+            for(int i = 0; i < 4 && _net->poll(); ++i) {}
+        }
 
         void init_net_sync_buffers()
         {
+            _desync_shown = false;
             _net_frame = 0;
             _net_ev_send = 0;
             _net_ev_pkt = 0;

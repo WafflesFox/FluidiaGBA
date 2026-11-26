@@ -5,6 +5,9 @@ namespace phone
 {
     constexpr const char* changelog_entries[] =
     {
+        "0.4.9a: Added Harue as a fighter!",
+        "0.4.8a: Fixed most of the Multiplayer Desync!",
+        "0.4.7a: Added Umbreon as a fighter.",
         "0.4.5a: Added Experimental Multiplayer Support! (and a debug menu)",
         "0.4.4p: Added 3D environment for battle scenes.",
         "0.4.2p: Almost Finshed adding Filip as a fighter.",
