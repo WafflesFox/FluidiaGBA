@@ -65,6 +65,12 @@ namespace phone
         }
         return count;
     }
+    struct Options
+    {
+        bool battle_3d = true;
+        bool battle_tint = true;
+    };
+
     struct Stopwatch
     {
         bool running = false;

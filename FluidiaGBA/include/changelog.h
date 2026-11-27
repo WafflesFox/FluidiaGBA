@@ -5,6 +5,9 @@ namespace phone
 {
     constexpr const char* changelog_entries[] =
     {
+        "0.5.2a: Massive AI update, the AI will now adapt to the moves they have.",
+        "0.5.1a: Bug Fixes!: Fixed an issue where Dimensional Slice does not slice the enemy... Fixed an issue where the slice animation for Harue's final smash is inverted.",
+        "0.5.0a: Fixed Color Palette Crash when cloning Umbreon when Waffles and Harue are fighting alongside each other.",
         "0.4.9a: Added Harue as a fighter!",
         "0.4.8a: Fixed most of the Multiplayer Desync!",
         "0.4.7a: Added Umbreon as a fighter.",

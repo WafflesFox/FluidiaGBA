@@ -19,6 +19,7 @@
 #include "bn_sprite_items_phone_fill.h"
 #include "bn_sprite_items_flappy_bird.h"
 #include "bn_sprite_items_flappy_pipe.h"
+#include "bn_sprite_items_icon_settings.h"
 
 #include "phone_logic.h"
 #include "changelog.h"
@@ -60,11 +61,11 @@ namespace phone
     constexpr int LOG_LINES = 5;                   // lines shown at once: each character is a SPRITE, so don't go wild
     constexpr int LOG_MAX   = 96;                  // total wrapped lines kept in memory
 
-    enum App { APP_HOME, APP_CALC, APP_FLAPPY, APP_LOG, APP_STOPWATCH };
+    enum App { APP_HOME, APP_CALC, APP_FLAPPY, APP_LOG, APP_STOPWATCH, APP_SETTINGS };
 
-    constexpr int APP_COUNT = 4;
-    constexpr int APP_IDS[APP_COUNT] = { APP_CALC, APP_FLAPPY, APP_LOG, APP_STOPWATCH };   // the order on the home screen
-    constexpr const char* APP_NAMES[APP_COUNT] = { "Calc", "Bird", "Log", "Time" };
+    constexpr int APP_COUNT = 5;
+    constexpr int APP_IDS[APP_COUNT] = { APP_CALC, APP_FLAPPY, APP_LOG, APP_STOPWATCH, APP_SETTINGS };
+    constexpr const char* APP_NAMES[APP_COUNT] = { "Calc", "Bird", "Log", "Time", "Opts" };
 
     inline int home_x(int i) { return SCREEN_CX + (i % 3 - 1) * 36; }     // 3 icons per row
     inline int home_y(int i) { return -16 + (i / 3) * 44; }                // the label is 24 below the icon
@@ -73,6 +74,7 @@ namespace phone
     {
     public:
         bool active() const { return is_open; }
+        const Options& settings() const { return options; }
 
         void open(bn::sprite_text_generator& text)
         {
@@ -90,6 +92,7 @@ namespace phone
                 case APP_FLAPPY:  update_flappy(text);  break;
                 case APP_LOG:     update_log(text);     break;
                 case APP_STOPWATCH: update_stopwatch(text); break;
+                case APP_SETTINGS:  update_settings(text);  break;
                 default:          update_home(text);    break;
             }
         }
@@ -112,6 +115,8 @@ namespace phone
         int calc_col = 1;
 
         Stopwatch stopwatch;
+        Options options;
+        int settings_sel = 0;
         int shown_tenths = -1;
 
         bn::vector<TextLine, LOG_MAX> log_lines;
@@ -189,8 +194,9 @@ namespace phone
             text.generate(SCREEN_CX, -52, "PHONE", ui);
             for(int i = 0; i < APP_COUNT; ++i)
             {
-                bn::sprite_ptr icon = bn::sprite_items::phone_icons.create_sprite(
-                bn::fixed(home_x(i)), bn::fixed(home_y(i)), i);
+                bn::sprite_ptr icon = (APP_IDS[i] == APP_SETTINGS)
+                    ? bn::sprite_items::icon_settings.create_sprite(bn::fixed(home_x(i)), bn::fixed(home_y(i)))
+                    : bn::sprite_items::phone_icons.create_sprite(bn::fixed(home_x(i)), bn::fixed(home_y(i)), i);
                 icon.set_bg_priority(0);
                 ui.push_back(icon);
                 text.generate(home_x(i), home_y(i) + 24, APP_NAMES[i], ui);
@@ -206,6 +212,7 @@ namespace phone
                 case APP_FLAPPY:     open_flappy(text);     break;
                 case APP_LOG:        open_log(text);        break;
                 case APP_STOPWATCH:  open_stopwatch(text);  break;
+                case APP_SETTINGS:   open_settings(text);   break;
                 default:                                    break;
             }
         }
@@ -308,6 +315,46 @@ namespace phone
             else if(bn::keypad::b_pressed())    { go_home(text); return; }   // B always goes back
 
             if(stopwatch.frames / 6 != shown_tenths) { refresh_stopwatch(text); }   // redraw only when the digit changes
+        }
+
+        // ---------------------------------------------------------------- SETTINGS
+
+        void open_settings(bn::sprite_text_generator& text)
+        {
+            app = APP_SETTINGS;
+            clear_screen();
+            text.generate(SCREEN_CX, -56, "SETTINGS", ui);
+            text.generate(SCREEN_CX, -20, "3D BATTLE BG", ui);
+            text.generate(SCREEN_CX,  16, "P1/P2 TINT", ui);
+            text.generate(SCREEN_CX,  54, "A:FLIP B:BACK", ui);
+            refresh_settings(text);
+        }
+
+        void refresh_settings(bn::sprite_text_generator& text)
+        {
+            display.clear();
+            text.generate(SCREEN_CX, -4, options.battle_3d   ? "ON" : "OFF", display);
+            text.generate(SCREEN_CX, 32, options.battle_tint ? "ON" : "OFF", display);
+            place_cursor(SCREEN_CX, settings_sel == 0 ? -4 : 32);
+        }
+
+        void update_settings(bn::sprite_text_generator& text)
+        {
+            if(bn::keypad::up_pressed() || bn::keypad::down_pressed())
+            {
+                settings_sel = 1 - settings_sel;
+                refresh_settings(text);
+            }
+            else if(bn::keypad::a_pressed() || bn::keypad::left_pressed() || bn::keypad::right_pressed())
+            {
+                if(settings_sel == 0) { options.battle_3d   = !options.battle_3d;   }
+                else                  { options.battle_tint = !options.battle_tint; }
+                refresh_settings(text);
+            }
+            else if(bn::keypad::b_pressed())
+            {
+                go_home(text);
+            }
         }
 
         // ---------------------------------------------------------------- CHANGELOG

@@ -65,7 +65,7 @@ namespace battle
     constexpr Move fox_thief_throw = Move("Fox Thief (throw)", 26, ANIM_RTS)
         .throws_stored(8, 130);
 
-    constexpr Move fox_thief = Move("Fox Thief", 30, ANIM_STANCE)
+    constexpr Move fox_thief = Move("Fox Thief", 30, ANIM_WAF_STEAL)
         .absorbs(3, 25)
         .swaps_when_holding(&fox_thief_throw);
 
@@ -349,10 +349,10 @@ namespace battle
         .swaps_when_holding(&har_sonic_boom);
 
     // Side + B: Dash & Slash; when powered up plants a 2-second delayed explosion on hit
-    constexpr Move har_dash_slash = Move("Flash Slash", 34, ANIM_HAR_DASH)
+    constexpr Move har_dash_slash = Move("Flash Slash", 32, ANIM_HAR_DASH)
         .once_per_jump()
-        .dash(Drive().frames(5, 16).speed(fp(6.0), 0).stops_on_hit())
-        .hit(Hitbox().frames(6, 17).at(16, 14).size(26, 22).dmg(8).launch(fp(3.2), fp(-2.0)).stun(18).delayed_boom(16));
+        .dash(Drive().frames(4, 18).speed(fp(8.5), 0))
+        .hit(Hitbox().frames(4, 18).at(12, 14).size(28, 22).dmg(8).launch(0, 0).stun(18).delayed_boom(16));
 
     // Up + B: Upper slash into the air, then heavy downward slam slash (huge damage, huge end lag)
     constexpr Move har_up_down_slash = Move("Sky Splitter", 66, ANIM_HAR_UPDOWN)

@@ -91,13 +91,16 @@ namespace battle
     // When you draw real ones, only pick_frame() in battle.h needs to change.
     enum
     {
+        // Waffles
         ANIM_STAND, ANIM_SLAP, ANIM_TAIL, ANIM_TAIL_UP, ANIM_KICK, ANIM_SPIN, ANIM_SLAM,
-        ANIM_SHOOT, ANIM_JET_SIDE, ANIM_JET_UP, ANIM_JET_DOWN, ANIM_STANCE, ANIM_RTS, ANIM_SNEP_PUNCH,
-        // Filip (snep)
+        ANIM_SHOOT, ANIM_JET_SIDE, ANIM_JET_UP, ANIM_JET_DOWN, ANIM_STANCE, 
+        ANIM_WAF_CHARGE, ANIM_WAF_STEAL,
+        // Filip and Umbreon
         ANIM_SNEP_JAB, ANIM_SNEP_HEAVY, ANIM_SNEP_FLIP, ANIM_SNEP_DSMASH, ANIM_SNEP_COUNTER, ANIM_SNEP_COUNTER_GRAB,
         ANIM_SNEP_SPIN_THROW, ANIM_SNEP_THROW_UP, ANIM_SNEP_LEAP, ANIM_SNEP_SCRATCH, ANIM_SNEP_DAIR,
-        ANIM_UMB_MINE, ANIM_UMB_SLASH, ANIM_UMB_PLACE, ANIM_UMB_BOW, ANIM_UMB_THROW,
-        ANIM_WAF_CHARGE,
+        ANIM_UMB_MINE, ANIM_UMB_SLASH, ANIM_UMB_PLACE, ANIM_UMB_BOW, ANIM_UMB_THROW, ANIM_RTS, ANIM_SNEP_PUNCH,
+        
+        // Harue (dad)
         ANIM_HAR_JAB, ANIM_HAR_FSMASH, ANIM_HAR_USMASH, ANIM_HAR_SPIN,
         ANIM_HAR_CHARGE, ANIM_HAR_BSHOT, ANIM_HAR_DASH, ANIM_HAR_UPDOWN,
         ANIM_HAR_REFLECT, ANIM_HAR_FS,
@@ -548,6 +551,13 @@ namespace battle
         int mode_timer = 0;
         int last_react = -1000;         // the frame it last decided whether to guard against a melee move
         bool rush = false;              // true = walks up and fights close, false = keeps its distance and shoots
+        int opp_proj_count = 0;
+        int opp_rush_count = 0;
+        int opp_shield_count = 0;
+        int opp_air_count = 0;
+        int adapt_timer = 0;
+        int charge_hold = 0;
+        int last_opp_state = 0;
     };
 
     struct Rect { int x, y, w, h; };    // a box: x and y are its MIDDLE, in pixels
@@ -591,6 +601,7 @@ namespace battle
         int pending_final_smash_id = FS_NONE;
         int debug_ai_mode = DBG_AI_NORMAL;
         int debug_ai_target = 1;
+        int debug_ai_skill = -1;
         bool net_client = false;
         int debug_force_slot = SLOT_SPECIAL;
         int debug_cd = 0;
@@ -702,10 +713,7 @@ namespace battle
             if(victim.state == ST_SHIELD) { victim.state = ST_IDLE; }
 
             hit(victim, damage, kb_x, kb_y, stun, dir, victim.x16, victim.y16 - (victim.stats->body_h * FP) / 2, nullptr);
-            if(victim.hp <= 0 && winner < 0 && victim_idx < 2)
-            {
-                winner = team_of(attacker_idx) == 0 ? 0 : 1;
-            }
+            check_winner();
         }
 
         void start(const StageGeom& geometry, const FighterStats& player, const FighterStats& enemy, unsigned seed,
@@ -727,6 +735,7 @@ namespace battle
             pending_final_smash_id = FS_NONE;
             debug_ai_mode = DBG_AI_NORMAL;
             debug_ai_target = 1;
+            debug_ai_skill = -1;
             debug_force_slot = SLOT_SPECIAL;
             net_client = false;
             debug_cd = 0;
@@ -867,29 +876,71 @@ namespace battle
                 }
             }
 
-            if(winner < 0)
-            {
-                if(f[0].hp <= 0)      { winner = 1; }
-                else if(f[1].hp <= 0) { winner = 0; }
-                else if(frame >= TIME_LIMIT) { winner = f[0].hp > f[1].hp ? 0 : 1; }
-            }
+            check_winner();
         }
 
         // Teams: the player (0) and the partner (2) against the opponent (1).
-        static int team_of(int i) { return (i == 1 || i == 4) ? 1 : 0; }
+        bool team_alive(int t) const
+        {
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
+            {
+                if(f[i].active && !f[i].is_clone && f[i].hp > 0 && team_of(i) == t) { return true; }
+            }
+            return false;
+        }
 
-        int foe_of(int i) const
+        int team_hp(int t) const
+        {
+            int sum = 0;
+            for(int i = 0; i < MAX_FIGHTERS; ++i)
+            {
+                if(f[i].active && !f[i].is_clone && f[i].hp > 0 && team_of(i) == t) { sum += f[i].hp; }
+            }
+            return sum;
+        }
+
+        void check_winner()
+        {
+            if(winner >= 0) { return; }
+            const bool t0 = team_alive(0);
+            const bool t1 = team_alive(1);
+            if(!t0)      { winner = 1; }
+            else if(!t1) { winner = 0; }
+            else if(frame >= TIME_LIMIT) { winner = (team_hp(0) > team_hp(1)) ? 0 : 1; }
+        }
+
+        int non_clone_foe_of(int i) const
         {
             const int my_team = team_of(i);
             int best = my_team == 0 ? 1 : 0;
             int best_dist = 0x7FFFFFFF;
             for(int j = 0; j < MAX_FIGHTERS; ++j)
             {
-                if(!f[j].active || f[j].state == ST_KO || team_of(j) == my_team) { continue; }
+                if(!f[j].active || f[j].is_clone || f[j].state == ST_KO || team_of(j) == my_team) { continue; }
                 const int d = abs_i(f[j].x16 - f[i].x16);
                 if(d < best_dist) { best_dist = d; best = j; }
             }
             return best;
+        }
+
+        static int team_of(int i) { return (i == 1 || i == 4) ? 1 : 0; }
+
+        int foe_of(int i) const
+        {
+            const int my_team = team_of(i);
+            int best_real = -1;
+            int best_real_dist = 0x7FFFFFFF;
+            int best_any = my_team == 0 ? 1 : 0;
+            int best_any_dist = 0x7FFFFFFF;
+            for(int j = 0; j < MAX_FIGHTERS; ++j)
+            {
+                if(!f[j].active || f[j].state == ST_KO || team_of(j) == my_team) { continue; }
+                const int d = abs_i(f[j].x16 - f[i].x16);
+                if(!f[j].is_clone && d < best_real_dist) { best_real_dist = d; best_real = j; }
+                if(d < best_any_dist) { best_any_dist = d; best_any = j; }
+            }
+            if(best_real >= 0 && (best_any == best_real || best_any_dist > 36 * FP)) { return best_real; }
+            return (best_real >= 0 && best_any_dist > best_real_dist) ? best_real : best_any;
         }
 
         int ally_of(int i) const
@@ -1036,6 +1087,7 @@ namespace battle
             }
 
             const FighterStats& s = *me.stats;
+            const int skill = (self == debug_ai_target && debug_ai_skill >= 0) ? debug_ai_skill : s.ai_skill;
             const int dx = (op.x16 - me.x16) / FP;
             const int dy = (op.y16 - me.y16) / FP;
             const int adx = abs_i(dx);
@@ -1055,7 +1107,25 @@ namespace battle
                 return in;
             }
 
-            // Deterministic RNG-free AI for Water Clones (never touches Fight::rng or desyncs Netplay)
+            // Harue Focus Charge: hold B until charge_hold finishes or enemy rushes inside punish range!
+            if(me.state == ST_ATTACK && me.move && me.move->charges_power)
+            {
+                if(brain.charge_hold > 0)
+                {
+                    --brain.charge_hold;
+                    if(adx < 48 && ady < 34 && random_below(100) < skill)
+                    {
+                        brain.charge_hold = 0;      // smart cancel: fires Sonic Slash if early, or drops guard
+                    }
+                    else
+                    {
+                        in.special_held = true;
+                    }
+                }
+                return in;
+            }
+
+            // Deterministic RNG-free AI for Water/Shadow Clones (never touches Fight::rng or desyncs Netplay)
             if(me.is_clone)
             {
                 const FighterStats& cs = *me.stats;
@@ -1132,7 +1202,40 @@ namespace battle
                 return in;
             }
 
-            // 0. TNT awareness: dodge or jump away from nearby TNT
+            // ---- Adaptive Opponent Observation (scaled by ai_skill) ----
+            if(op.state != ST_KO)
+            {
+                if(op.state == ST_SHIELD && brain.last_opp_state != ST_SHIELD && random_below(100) < skill)
+                {
+                    if(brain.opp_shield_count < 20) { brain.opp_shield_count += 3; }
+                }
+                if(op.state == ST_ATTACK && op.move && op.move_frame == 1 && random_below(100) < skill)
+                {
+                    if(op.move->shot_frame >= 0 || (op.move->shot_list_count > 0))
+                    {
+                        if(brain.opp_proj_count < 20) { brain.opp_proj_count += 3; }
+                    }
+                    else if(adx < 52 && brain.opp_rush_count < 20)
+                    {
+                        brain.opp_rush_count += 2;
+                    }
+                }
+                if(!op.on_ground && (frame % 15 == 0) && random_below(100) < skill && brain.opp_air_count < 20)
+                {
+                    ++brain.opp_air_count;
+                }
+                brain.last_opp_state = op.state;
+            }
+            if(++brain.adapt_timer >= 60)
+            {
+                brain.adapt_timer = 0;
+                if(brain.opp_proj_count > 0)   { --brain.opp_proj_count; }
+                if(brain.opp_rush_count > 0)   { --brain.opp_rush_count; }
+                if(brain.opp_shield_count > 0) { --brain.opp_shield_count; }
+                if(brain.opp_air_count > 0)    { --brain.opp_air_count; }
+            }
+
+            // 0. TNT awareness
             for(const Projectile& t : proj)
             {
                 if(!t.active || t.shot.kind != PROJ_TNT) { continue; }
@@ -1147,7 +1250,7 @@ namespace battle
                 }
             }
 
-            // 0b. Pig mount: charge at foe, jump off if pig low HP or foe is high above
+            // 0b. Pig mount
             if(me.on_pig)
             {
                 if(me.pig_hp <= 12 || (dy < -36 && adx < 60) || (me.smash >= SMASH_MAX && s.final_smash_move))
@@ -1159,16 +1262,22 @@ namespace battle
                 return in;
             }
 
-            // 0c. Final Smash
-            if(can_act && s.final_smash_move && me.smash >= SMASH_MAX && op.state != ST_KO)
+            // 0c. Final Smash (only target the real opponent, never a clone!)
+            const int real_foe_idx = non_clone_foe_of(self);
+            const Fighter& real_foe = f[real_foe_idx];
+            if(can_act && s.final_smash_move && me.smash >= SMASH_MAX && real_foe.active && !real_foe.is_clone && real_foe.state != ST_KO)
             {
+                const int fs_dx = (real_foe.x16 - me.x16) / FP;
+                const int fs_adx = abs_i(fs_dx);
+                const int fs_ady = abs_i((real_foe.y16 - me.y16) / FP);
+                const int fs_tow = fs_dx >= 0 ? 1 : -1;
                 const bool ranged_fs = s.final_smash_move->shot_frame >= 0;
                 const int max_dx = ranged_fs ? 175 : 52;
                 const int max_dy = ranged_fs ? 26 : 32;
-                if(adx < max_dx && ady < max_dy)
+                if(fs_adx < max_dx && fs_ady < max_dy)
                 {
-                    if(me.facing != toward) { in.move = toward; return in; }
-                    if(random_below(100) < 35 + s.ai_skill / 2)
+                    if(me.facing != fs_tow) { in.move = fs_tow; return in; }
+                    if(random_below(100) < 35 + skill / 2)
                     {
                         in.final_smash = true;
                         return in;
@@ -1176,7 +1285,7 @@ namespace battle
                 }
             }
 
-            // 1. Incoming projectile reaction (also spots nearby enemy TNT for Fox Thief)
+            // 1. Incoming projectile reaction!
             const Projectile* threat = nullptr;
             int threat_dist = 9999;
             const int my_mid_y = me.y16 - (s.body_h * FP) / 2;
@@ -1189,18 +1298,24 @@ namespace battle
                 const bool coming = is_tnt ? (abs_i(pdx) < 44)
                                            : ((pdx > 0 && p.vx < 0) || (pdx < 0 && p.vx > 0) || (p.vx == 0 && abs_i(pdx) < 20));
                 const int pdy = abs_i((p.y16 - my_mid_y) / FP);
-                if(coming && abs_i(pdx) < 100 && pdy < s.body_h / 2 + p.shot.h / 2 + 4 && abs_i(pdx) < threat_dist)
+                if(coming && abs_i(pdx) < 108 && pdy < s.body_h / 2 + p.shot.h / 2 + 6 && abs_i(pdx) < threat_dist)
                 {
                     threat = &p;
                     threat_dist = abs_i(pdx);
                 }
             }
 
-            if(threat && threat_dist < 76 && threat->id != brain.absorb_handled)
+            const Move* down_b = s.moves ? s.moves->slot[SLOT_SPECIAL_DOWN] : nullptr;
+            const bool can_reflect = down_b && down_b->reflect_end > 0 && me.har_power_timer == 0;
+            const bool can_absorb  = down_b && down_b->absorb_end > 0 && !me.has_stored;
+
+            if(threat && threat_dist < 80 && threat->id != brain.absorb_handled)
             {
                 brain.absorb_handled = threat->id;
-                if(can_act && !me.has_stored && threat->shot.absorbable && has_move(s, SLOT_SPECIAL_DOWN) &&
-                   s.moves->slot[SLOT_SPECIAL_DOWN]->absorb_end > 0 && random_below(100) < s.ai_skill / 2)
+                const int react_bonus = (brain.opp_proj_count >= 5) ? 25 : 0;
+                const int reflect_chance = skill * 3 / 4 + react_bonus;
+                if(can_act && threat->shot.absorbable && (can_reflect || can_absorb) &&
+                   random_below(100) < (can_reflect ? reflect_chance : (skill / 2 + react_bonus)))
                 {
                     brain.handled_projectile = threat->id;
                     in.special = true;
@@ -1212,8 +1327,8 @@ namespace battle
             if(threat && threat->id != brain.handled_projectile && (threat->vx != 0 || threat->vy != 0))
             {
                 brain.handled_projectile = threat->id;
-                if(me.on_ground && random_below(100) < s.ai_skill)       { brain.shield_hold = 18 + random_below(10); }
-                else if(me.jumps_left > 0 && random_below(100) < 45)     { in.jump = true; }
+                if(me.on_ground && random_below(100) < skill)          { brain.shield_hold = 16 + random_below(10); }
+                else if(me.jumps_left > 0 && random_below(100) < 40 + skill / 4) { in.jump = true; }
             }
             if(brain.shield_hold > 0)
             {
@@ -1222,11 +1337,24 @@ namespace battle
                 return in;
             }
 
-            if(me.on_ground && can_act && op.state == ST_ATTACK && op.move && op.move->hit_count > 0 && adx < 46 && ady < 34 &&
-               frame - brain.last_react > 25)
+            // 1b. Melee defense!
+            if(me.on_ground && can_act && op.state == ST_ATTACK && op.move && op.move->hit_count > 0 &&
+               adx < 48 && ady < 34 && frame - brain.last_react > 22)
             {
                 brain.last_react = frame;
-                if(random_below(100) < s.ai_skill / 2) { brain.shield_hold = 14 + random_below(12); }
+                const bool has_melee_counter = down_b && down_b->on_counter_melee != nullptr;
+                const int rush_bonus = (brain.opp_rush_count >= 6) ? 20 : 0;
+                if(has_melee_counter && random_below(100) < skill / 3 + rush_bonus)
+                {
+                    if(me.facing != toward) { in.move = toward; return in; }
+                    in.special = true;
+                    in.down = true;
+                    return in;
+                }
+                if(random_below(100) < skill / 2)
+                {
+                    brain.shield_hold = 14 + random_below(10);
+                }
             }
             if(brain.shield_hold > 0)
             {
@@ -1235,12 +1363,37 @@ namespace battle
                 return in;
             }
 
-            if(me.has_stored && can_act && has_move(s, SLOT_SPECIAL_DOWN) && ady < 26 && adx < 170 && random_below(100) < 6)
+            // 2. Stored shot throw (Waffles Fox Thief)
+            if(me.has_stored && can_act && down_b && down_b->alt && ady < 26 && adx < 170 && random_below(100) < 8 + skill / 10)
             {
-                in.move = toward;
+                if(me.facing != toward) { in.move = toward; return in; }
                 in.special = true;
                 in.down = true;
                 return in;
+            }
+
+            // 2a. Harue strategic abilities: Focus Charge (Hold B) & Shadow Twin Clone (Powered Down+B)
+            const Move* neut_b = s.moves ? s.moves->slot[SLOT_SPECIAL] : nullptr;
+            if(neut_b && neut_b->charges_power && can_act)
+            {
+                if(me.har_power_timer > 0)
+                {
+                    const int cl_slot = (team_of(self) == 0) ? 3 : 4;
+                    if(!f[cl_slot].active && down_b && down_b->alt && adx > 48 &&
+                       (me.har_power_timer < 240 || random_below(1000) < 12 + skill / 6))
+                    {
+                        in.special = true;
+                        in.down = true;
+                        return in;
+                    }
+                }
+                else if(me.on_ground && adx > 82 && skill >= 30 && random_below(1000) < 8 + skill / 5)
+                {
+                    brain.charge_hold = 35 + random_below(55);
+                    in.special = true;
+                    in.special_held = true;
+                    return in;
+                }
             }
 
             // 2b. Umbreon mining & crafting priority
@@ -1264,106 +1417,167 @@ namespace battle
                         }
                     }
                 }
-                else if(me.materials < MAX_MATERIALS && adx > 58 && random_below(100) < 15 + s.ai_skill / 8)
+                else if(me.materials < MAX_MATERIALS && adx > 58 && random_below(100) < 15 + skill / 8)
                 {
                     in.special = true;
                     return in;
                 }
             }
 
-            // 2c. Umbreon midair block placement (costs 1 material)
+            // 2c. Umbreon midair block placement
             if(s.spawns_crafting_table && can_act && !me.on_ground && me.materials >= 1 &&
                me.vy >= 0 && me.y16 < (stage.ground_y - 16) * FP &&
-               random_below(100) < 10 + s.ai_skill / 10)
+               random_below(100) < 10 + skill / 10)
             {
                 in.special = true;
                 return in;
             }
 
-            // 3. Movement
+            // 3. Movement (adaptive spacing & stun-punish rushdown)
             if(--brain.mode_timer <= 0)
             {
-                brain.mode_timer = 90 + random_below(150);
-                brain.rush = random_below(100) < 35 + s.ai_skill / 3;
+                brain.mode_timer = 75 + random_below(130);
+                const int rush_bias = (brain.opp_proj_count >= 6 ? 25 : 0) - (brain.opp_rush_count >= 8 ? 15 : 0);
+                brain.rush = random_below(100) < (40 + skill / 3 + rush_bias);
             }
-            const bool seeking_fs = s.final_smash_move != nullptr && me.smash >= SMASH_MAX && s.final_smash_move->shot_frame < 0;
-            const int wanted_range = seeking_fs ? 18 : (brain.rush ? 24 : 96);
+            const bool op_stunned = (op.state == ST_HURT && op.timer >= 12);
+            const bool seeking_fs = s.final_smash_move != nullptr && me.smash >= SMASH_MAX &&
+                                    s.final_smash_move->shot_frame < 0 && real_foe.active && real_foe.state != ST_KO;
+            const bool has_zoning = (s.moves && s.moves->slot[SLOT_SPECIAL_UP] && s.moves->slot[SLOT_SPECIAL_UP]->shot_list_count > 0) ||
+                                    (neut_b && (neut_b->shot_frame >= 0 || neut_b->shot_list_count > 0 || neut_b->charges_power));
+            const int move_dx = seeking_fs ? ((real_foe.x16 - me.x16) / FP) : dx;
+            const int move_adx = abs_i(move_dx);
+            const int move_tow = move_dx >= 0 ? 1 : -1;
+            const int wanted_range = (seeking_fs || op_stunned) ? 18 : (brain.rush ? 24 : (has_zoning ? 88 : 42));
             if(--brain.strafe_timer <= 0)
             {
-                brain.strafe_timer = 25 + random_below(50);
+                brain.strafe_timer = 22 + random_below(45);
                 brain.strafe = random_below(3) - 1;
             }
-            if(adx > wanted_range + 25)       { in.move = toward; }
-            else if(adx < wanted_range - 40)  { in.move = -toward; }
+            if(move_adx > wanted_range + 22)       { in.move = move_tow; }
+            else if(move_adx < wanted_range - 36)  { in.move = -move_tow; }
             else                              { in.move = brain.strafe; }
 
-            // 4. Attacks
+            // 4. Attacks (punishes stuns, beats shields, uses full kit!)
             if(can_act)
             {
                 const bool grounded = me.on_ground;
                 const bool facing_op = me.facing == toward;
-                const int urge = 2 + s.ai_skill / 20 + (brain.rush ? 3 : 0);
+                const int urge = 2 + skill / 18 + (brain.rush ? 3 : 0) + (op_stunned ? 12 : 0);
+                const Move* side_b = s.moves ? s.moves->slot[SLOT_SPECIAL_SIDE] : nullptr;
+                const Move* up_b   = s.moves ? s.moves->slot[SLOT_SPECIAL_UP] : nullptr;
+                const Move* fsmash = s.moves ? s.moves->slot[SLOT_FSMASH] : nullptr;
+                const Move* dsmash = s.moves ? s.moves->slot[SLOT_DSMASH] : nullptr;
 
-                if(adx < 36 && ady < 30)
+                // Stun punish! (e.g. Filip after landing Insult, or Harue after Sonic Slash / shield break)
+                if(op_stunned && adx < 56 && ady < 28 && random_below(100) < 20 + skill / 2)
                 {
-                    if(random_below(100) < urge + 4)
+                    if(grounded && fsmash && adx < 46)
+                    {
+                        in.move = toward; in.attack = true; return in;
+                    }
+                    if(side_b && side_b->on_grab)
+                    {
+                        in.move = toward; in.special = true; return in;
+                    }
+                }
+
+                // Shield pressure! If opponent shields a lot, grab (Filip Pounce) or space them out
+                if(op.state == ST_SHIELD && adx < 54 && ady < 28 && random_below(100) < 8 + skill / 5 + brain.opp_shield_count)
+                {
+                    if(side_b && side_b->on_grab)
+                    {
+                        in.move = toward; in.special = true; return in;
+                    }
+                    if(grounded && dsmash && adx < 28)
+                    {
+                        in.down = true; in.attack = true; return in;
+                    }
+                }
+
+                if(adx < 42 && ady < 30)
+                {
+                    if(random_below(100) < urge + 5)
                     {
                         const int r = random_below(100);
                         if(grounded)
                         {
-                            if(s.spawns_crafting_table && !facing_op && has_move(s, SLOT_DSMASH) && r < 55)
+                            if(s.spawns_crafting_table && !facing_op && dsmash && r < 55)
                             {
                                 in.down = true; in.attack = true;
+                            }
+                            else if(adx > 26 && fsmash && fsmash->hit_count > 0 && fsmash->hits[0].w >= 36 && r < 65)
+                            {
+                                // Long-reach Side+A spacing (e.g. Harue Great Cleave)
+                                in.move = toward; in.attack = true;
                             }
                             else if(r < 35)
                             {
                                 if(facing_op) { in.move = 0; in.attack = true; } else { in.move = toward; }
                             }
-                            else if(r < 72) { in.move = toward; in.attack = true; }
-                            else if(r < 90) { in.down = true; in.attack = true; }
-                            else if(s.spawns_crafting_table && has_move(s, SLOT_SPECIAL_DOWN))
+                            else if(r < 68) { in.move = toward; in.attack = true; }
+                            else if(r < 88) { in.down = true; in.attack = true; }
+                            else if(s.spawns_crafting_table && down_b)
                             {
                                 in.down = true; in.special = true;
                             }
                         }
                         else
                         {
-                            if(r < 45) { in.move = 0; in.attack = true; }
+                            if(r < 50) { in.move = 0; in.attack = true; }
                             else       { in.move = toward; in.attack = true; }
                         }
                     }
                 }
-                else if(s.moves && s.moves->slot[SLOT_SPECIAL_UP] && s.moves->slot[SLOT_SPECIAL_UP]->charges_clone &&
-                        !me.is_clone && me.hp > CLONE_HP_COST + 10 && !f[team_of(self) == 0 ? 3 : 4].active && adx > 95 && random_below(1000) < 12)
+                else if(up_b && up_b->charges_clone && !me.is_clone && me.hp > CLONE_HP_COST + 10 &&
+                        !f[team_of(self) == 0 ? 3 : 4].active && adx > 95 && random_below(1000) < 12)
                 {
                     in.up = true; in.special = true;
                 }
-                else if(dy < -24 && adx < 55)
+                else if(dy < -22 && adx < 55)
                 {
                     const int r = random_below(100);
-                    if(adx < 28 && r < urge + 3) { in.up = true; in.attack = true; }
-                    else if(r < urge + 5 && has_move(s, SLOT_SPECIAL_UP) && !s.moves->slot[SLOT_SPECIAL_UP]->charges_clone)
+                    const int aa_urge = urge + (brain.opp_air_count >= 5 ? 4 : 0);
+                    if(adx < 30 && r < aa_urge + 4)
                     {
-                        in.up = true; in.special = true;
+                        if(!facing_op) { in.move = toward; }
+                        else           { in.up = true; in.attack = true; }
+                    }
+                    else if(up_b && !up_b->charges_clone && up_b->shot_list_count == 0 && up_b->shot_frame < 0 &&
+                            adx < 28 && dy > -64 && r < aa_urge + 3)
+                    {
+                        // Only commit to aerial Up+B (Aqua Jet Up / Sky Splitter) when cleanly lined up!
+                        if(!facing_op) { in.move = toward; }
+                        else           { in.up = true; in.special = true; }
                     }
                 }
-                else if(!grounded && dy > 24 && adx < 24)
+                else if(!grounded && dy > 18 && adx < 26)
                 {
-                    if(random_below(100) < urge + 4) { in.down = true; in.attack = true; }
+                    if(random_below(100) < urge + 5) { in.down = true; in.attack = true; }
                 }
-                else if(ady < 28)
+                else if(ady < 32)
                 {
-                    const Move* side_b = s.moves ? s.moves->slot[SLOT_SPECIAL_SIDE] : nullptr;
-                    const Move* gun = s.moves ? s.moves->slot[SLOT_SPECIAL] : nullptr;
                     const Move* jab_m = s.moves ? s.moves->slot[SLOT_JAB] : nullptr;
-                    const int gun_range = (gun && gun->shot_frame >= 0) ? gun->shot.speed * gun->shot.life / FP : 0;
+                    const int gun_range = (neut_b && neut_b->shot_frame >= 0) ? neut_b->shot.speed * neut_b->shot.life / FP : 0;
 
-                    if(s.spawns_crafting_table && grounded && adx >= 36 && adx <= 72 && op.vx * dx < 0 &&
-                       has_move(s, SLOT_SPECIAL_DOWN) && random_below(1000) < 12 + s.ai_skill / 8)
+                    // Filip Throw Junk (B+Up) at mid-range (facing opponent!)
+                    if(up_b && up_b->shot_list_count > 0 && grounded && adx >= 44 && adx <= 135 && random_below(100) < 4 + skill / 14)
+                    {
+                        if(!facing_op) { in.move = toward; }
+                        else           { in.up = true; in.special = true; }
+                    }
+                    // Harue Tap B Sonic Slash (when neut_b has charges_power + alt projectile!)
+                    else if(neut_b && neut_b->charges_power && neut_b->alt && adx >= 52 && adx <= 175 && random_below(100) < 4 + skill / 12)
+                    {
+                        if(!facing_op) { in.move = toward; }
+                        else           { in.move = 0; in.special = true; in.special_held = false; }
+                    }
+                    else if(s.spawns_crafting_table && grounded && adx >= 36 && adx <= 72 && op.vx * dx < 0 &&
+                            down_b && random_below(1000) < 12 + skill / 8)
                     {
                         in.down = true; in.special = true;
                     }
-                    else if(jab_m && jab_m->shot_frame >= 0 && grounded && adx > 34 && adx < 115 && random_below(100) < 4 + s.ai_skill / 12)
+                    else if(jab_m && jab_m->shot_frame >= 0 && grounded && adx > 34 && adx < 115 && random_below(100) < 4 + skill / 12)
                     {
                         if(facing_op) { in.move = 0; in.attack = true; }
                         else          { in.move = toward; }
@@ -1372,24 +1586,25 @@ namespace battle
                     {
                         const int jet_range = (!side_b || side_b->mounts_pig) ? 0
                                             : (side_b->leap_frame >= 0
-                                               ? side_b->leap_vx * 16 / FP + 12
+                                               ? side_b->leap_vx * 16 / FP + 16
                                                : side_b->drive.vx * (side_b->drive.end - side_b->drive.start) / FP + 12);
                         const int gun_reach = gun_range > 0 ? (gun_range > 85 ? gun_range : 85) : 0;
 
-                        if(side_b && side_b->mounts_pig && adx > 65 && random_below(1000) < 10 + s.ai_skill / 8)
+                        if(side_b && side_b->mounts_pig && adx > 65 && random_below(1000) < 10 + skill / 8)
                         {
                             in.move = toward; in.special = true;
                         }
-                        else if(jet_range > 0 && adx > 40 && adx < jet_range && random_below(1000) < 6 + s.ai_skill / 10)
+                        else if(jet_range > 0 && adx > 38 && adx < jet_range &&
+                                random_below(1000) < (me.har_power_timer > 0 ? 18 : 7) + skill / 8)
                         {
                             in.move = toward; in.special = true;
                         }
-                        else if(gun_reach > 0 && adx > 36 && adx < gun_reach && random_below(100) < 3 + s.ai_skill / 12)
+                        else if(gun_reach > 0 && adx > 36 && adx < gun_reach && random_below(100) < 4 + skill / 12)
                         {
                             if(facing_op) { in.move = 0; in.special = true; }
                             else          { in.move = toward; }
                         }
-                        else if(gun && gun->shot.heal_ally > 0)
+                        else if(neut_b && neut_b->shot.heal_ally > 0)
                         {
                             const int al = ally_of(self);
                             if(al >= 0 && f[al].hp < f[al].stats->max_hp * 85 / 100)
@@ -1640,6 +1855,7 @@ namespace battle
                             ev.absorb = true;
                         }
                     }
+                    if(p.on_ground) { p.vx = approach(p.vx, 0, s.friction); }
                     integrate(p, false, false);
                     return;
                 }
@@ -1665,6 +1881,7 @@ namespace battle
                         p.state = p.on_ground ? ST_IDLE : ST_AIR;
                         if(!net_client && p.hp > CLONE_HP_COST) { spawn_water_clone(i); }
                     }
+                    if(p.on_ground) { p.vx = approach(p.vx, 0, s.friction); }
                     integrate(p, false, false);
                     return;
                 }
@@ -2384,10 +2601,7 @@ namespace battle
                         spawn_shot_at(fs_combo_atk, boom, vic.x16, vic.y16 - 14 * FP, 0, false);
                         ev.boom = true;
                         ev.hitsmash = true;
-                        if(vic.hp <= 0 && winner < 0 && fs_combo_vic < 2)
-                        {
-                            winner = team_of(fs_combo_atk) == 0 ? 0 : 1;
-                        }
+                        check_winner();
                     }
                 }
             }
@@ -2625,7 +2839,12 @@ namespace battle
                                 target.stored = pr.shot;
                                 pr.active = false;
                                 ev.absorb = true;
-                                if(tm->on_absorb) { begin_move(target, tm->on_absorb, target.move_magic); }
+                                if(tm->on_absorb)
+                            {
+                                if(pr.vx != 0) { target.facing = (pr.vx < 0) ? 1 : -1; }
+                                else if(f[pr.owner].x16 != target.x16) { target.facing = (f[pr.owner].x16 > target.x16) ? 1 : -1; }
+                                begin_move(target, tm->on_absorb, target.move_magic);
+                            }
                                 stolen = true;
                                 break;
                             }
@@ -2797,7 +3016,7 @@ namespace battle
                         if(dir == 0) { dir = sign_i(target.x16 - pr.x16); }
                         if(dir == 0) { dir = f[pr.owner].facing; }
 
-                        if(sh.final_smash != FS_NONE)
+                        if(sh.final_smash != FS_NONE && !target.is_clone)
                         {
                             if(target.state == ST_SHIELD) { target.state = ST_IDLE; }
                             target.on_pig = false;
@@ -2881,10 +3100,15 @@ namespace battle
                 if(ph.box.grab) { grab_connects(ph.attacker, ph.victim); continue; }
 
                 const bool same_team = (team_of(ph.victim) == team_of(ph.attacker));
-                const int fs_id = (attacker.move && attacker.move->final_smash != FS_NONE)
+                int fs_id = (attacker.move && attacker.move->final_smash != FS_NONE)
                                   ? ((same_team && attacker.move->ally_final_smash != FS_NONE)
                                      ? attacker.move->ally_final_smash : attacker.move->final_smash)
                                   : FS_NONE;
+                if(fs_id != FS_NONE && victim.is_clone)
+                {
+                    fs_id = FS_NONE;
+                    attacker.hit_done &= ~(1u << ph.index);  // slice through clone without wasting the FS swing
+                }
 
                 if(same_team && fs_id != FS_NONE)
                 {
