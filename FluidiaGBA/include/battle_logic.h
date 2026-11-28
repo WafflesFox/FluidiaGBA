@@ -472,6 +472,7 @@ namespace battle
         bool active = false;
         bool is_clone = false;
         int clone_of = -1;
+        bool shadow_clone = false;      // true = Harue's Shadow Twin (drawn purple). false = Waffles' Water Clone (cyan)
         int clone_charge = 0;
         int clone_timer = 0;
         int def_buff_timer = 0;
@@ -2407,6 +2408,7 @@ namespace battle
             f[slot].active = true;
             f[slot].is_clone = true;
             f[slot].clone_of = use_waffle ? 100 : owner;
+            f[slot].shadow_clone = true;
             f[slot].stats = &cs;
             f[slot].x16 = cx * FP;
             f[slot].y16 = op.y16;
@@ -2507,6 +2509,7 @@ namespace battle
                     cl.active = true;
                     cl.is_clone = true;
                     cl.clone_of = fs_combo_atk;
+                    cl.shadow_clone = true;
                     cl.stats = atk.stats;
                     cl.hp = 999;
                     const int sep = (fs_combo_home_x < mid) ? 20 * FP : -20 * FP;

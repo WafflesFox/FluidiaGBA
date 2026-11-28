@@ -120,6 +120,22 @@ namespace battle
                 return -1;
         }
     }
+    // Which slash picture a move freezes on during its recovery (-1 = none).
+    // Used by the body pose (attack_frame) AND the sword overlay (draw_move_effects), so they always agree.
+    inline int har_hold_step(int anim, int mf)
+    {
+        switch(anim)
+        {
+            case ANIM_HAR_JAB:    return mf >= 29 ? 0 : -1;
+            case ANIM_HAR_DASH:   return mf >= 19 ? 0 : -1;
+            case ANIM_HAR_FSMASH: return mf >= 21 ? 0 : -1;
+            case ANIM_HAR_FS:     return mf >= 16 ? 0 : -1;
+            case ANIM_HAR_BSHOT:  return mf >= 13 ? 0 : -1;    // B neutral (Sonic Slash)
+            case ANIM_HAR_USMASH: return mf >= 13 ? 2 : -1;    // up smash (holds the top picture)
+            case ANIM_HAR_UPDOWN: return mf >= 37 ? 0 : -1;
+            default:              return -1;
+        }
+    }
 
     inline int attack_frame(int anim, int facing, int side, int move_frame)
     {
@@ -128,7 +144,7 @@ namespace battle
         {
             case ANIM_SNEP_PUNCH:
             {
-                const int pic = play_once(snep_basic_punch, 5, 4, 0, move_frame);
+                const int pic = play_once(snep_basic_punch, 5, 4, 0, move_frame, true);
                 return pic >= 0 ? pic + (side == DIR_LEFT ? snep_basic_punch_offset : 0) : sheet_frame(side, false);
             }
             case ANIM_SNEP_JAB:
@@ -195,7 +211,7 @@ namespace battle
                 return sheet_frame(side, false);
             case ANIM_TAIL:
             {
-                const int pic = play_once(waff_tail_slam, 7, 4, 0, move_frame);
+                const int pic = play_once(waff_tail_slam, 7, 4, 0, move_frame, true);
                 return pic >= 0 ? pic + (side == DIR_LEFT ? waff_tail_slam_left_offset : 0) : sheet_frame(side, false);
             }
             case ANIM_RTS:
@@ -230,7 +246,7 @@ namespace battle
             }
             case ANIM_UMB_SLASH:
             {
-                const int pic = play_once(umb_sword_slash, 4, 5, 0, move_frame);
+                const int pic = play_once(umb_sword_slash, 4, 5, 0, move_frame, true);
                 return pic >= 0 ? pic + (side == DIR_LEFT ? umb_left_offset : 0) : sheet_frame(side, false);
             }
             case ANIM_UMB_PLACE:
@@ -256,6 +272,10 @@ namespace battle
                 const int idx = har_slash_step(anim, move_frame, left_half);
                 if(idx >= 0) { return har_slash[idx] + (side == DIR_LEFT ? har_slash_offset : 0); }
                 if(anim == ANIM_HAR_UPDOWN && move_frame >= 16 && move_frame < 24) { return sheet_frame(DIR_UP, true) + 1; }
+
+                // NEW: hold the last pose during recovery (body only)
+                const int hold = har_hold_step(anim, move_frame);
+                if(hold >= 0) { return har_slash[hold] + (side == DIR_LEFT ? har_slash_offset : 0); }
                 return sheet_frame(side, false);
             }
             case ANIM_HAR_SPIN:

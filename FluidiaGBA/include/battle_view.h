@@ -69,15 +69,14 @@ namespace battle
             sprite.set_bg_priority(0);
             sprite.set_z_order(clone ? 2 : (partner ? 1 : (opponent ? 0 : -1)));
             hud_dy = partner ? 26 : 0;
-
+            
             tint_mode = (tint_override >= 0) ? tint_override : (opponent ? 1 : (partner ? 2 : 0));
             pal = bn::sprite_palette_ptr::create_new(def.sprite->palette_item());
             if(tint_mode == 1)      { pal->set_fade(bn::color(31, 6, 6), 0.35); }
             else if(tint_mode == 2) { pal->set_fade(bn::color(6, 12, 31), 0.35); }
-            else if(tint_mode == 3) { pal->set_fade(bn::color(4, 22, 31), 0.55); }
+            else if(tint_mode == 3) { tint_palette(*pal, bn::color(20, 4, 28)); }   // shadow clone: purple
+            else if(tint_mode == 4) { tint_palette(*pal, bn::color(4, 22, 31)); }   // water clone: cyan
             sprite.set_palette(*pal);
-
-
 
             hp_back.set_bg_priority(0);
             hp_back.set_z_order(-10);

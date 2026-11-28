@@ -30,7 +30,7 @@
 
                 _floor_bg = stage.top_item->create_bg(0, 0);
                 _floor_bg->set_priority(1);
-                _floor_bg->set_wrapping_enabled(true);
+                _floor_bg->set_wrapping_enabled(stage.top_warps);
 
                 update_floor_dx(_cam_x);
                 _floor_pa_hbe = bn::affine_bg_pa_register_hbe_ptr::create(*_floor_bg, detail::floor_pa_buf);

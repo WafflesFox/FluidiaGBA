@@ -41,6 +41,7 @@ namespace battle
         const bn::sprite_item* floor_item = nullptr;      // nullptr = the default grass floor
         const bn::sprite_item* platform_item = nullptr;   // nullptr = the default wood platform
         const bn::affine_bg_item* top_item = nullptr;   // the picture on top of the 3D ground (nullptr = flat 2D stage)
+        bool top_warps = true;
     };
 
     // ---- things main.cpp can react to (sound effects) ----

@@ -6,6 +6,8 @@
 #include "bn_keypad.h"
 #include "battle_logic.h"
 #include "net_link.h"
+#include "bn_sprite_palette_ptr.h"
+#include "bn_color.h"
 
 namespace battle
 {
@@ -22,6 +24,18 @@ namespace battle
         while(value > 0) { tmp[t++] = char('0' + value % 10); value /= 10; }
         while(t > 0) { out[n++] = tmp[--t]; }
         out[n] = 0;
+    }
+    void tint_palette(bn::sprite_palette_ptr& pal, bn::color target)
+    {
+        const int count = pal.colors().size();
+        for(int i = 1; i < count; ++i)                      // 0 = transparent, leave it
+        {
+            const bn::color c = pal.colors()[i];
+            const int lum = (c.red() * 77 + c.green() * 150 + c.blue() * 29) >> 8;   // 0..31
+            pal.set_color(i, bn::color(target.red() * lum / 31,
+                                    target.green() * lum / 31,
+                                    target.blue() * lum / 31));
+        }
     }
 
     // the player's buttons -> what the rules need

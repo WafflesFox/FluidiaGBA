@@ -130,7 +130,16 @@
 
             if(v.pal)
             {
-                if(_fight.fs_freeze_timer > 0 && index == _fight.fs_freeze_user)
+                if(v.tint_mode == 3)                       // shadow clone: purple, pulsing
+                {
+                    const int pulse = _fight.frame % 24;
+                    const int tri = pulse < 12 ? pulse : 24 - pulse;
+                    v.pal->set_fade(bn::color(28, 16, 31), bn::fixed(tri) * bn::fixed(0.03));   // 0 .. 0.36
+                }
+                else if(v.tint_mode == 4)                  // water clone: steady cyan, nothing to do
+                {
+                }
+                else if(_fight.fs_freeze_timer > 0 && index == _fight.fs_freeze_user)
                 {
                     const int pulse = _fight.fs_freeze_timer % 8;
                     const int tri = pulse < 4 ? pulse : 8 - pulse;
@@ -170,10 +179,10 @@
                 //     const int tri = pulse < 6 ? pulse : 12 - pulse;
                 //     v.pal->set_fade(bn::color(6, 24, 31), bn::fixed(0.25) + bn::fixed(tri) * bn::fixed(0.07));
                 // }
-                else if(v.tint_mode == 3)
-                {
-                    v.pal->set_fade(bn::color(4, 22, 31), bn::fixed(0.55));
-                }
+                // else if(v.tint_mode == 3)
+                // {
+                //     v.pal->set_fade(bn::color(4, 22, 31), bn::fixed(0.55));
+                // }
                 else if(f.bomb_timer > 0 && (f.bomb_timer < 40 ? (_fight.frame % 6 < 3) : (_fight.frame % 16 < 4)))
                 {
                     v.pal->set_fade(bn::color(31, 10, 2), bn::fixed(0.65));
@@ -234,6 +243,12 @@
                     sword_idx = step;
                     blue_idx = 2 - step;
                 }
+                else
+                {
+                    const int hold = har_hold_step(move->anim, f.move_frame);
+                    if(hold >= 0) { sword_idx = hold; }      // sword stays, no blue slash
+                }
+                // else if(move->anim == ANIM_HAR_DASH && f.move_frame >= 19) { sword_idx = 0; }   // sword only, no blue slash
             }
             if(sword_idx >= 0)
             {
@@ -247,15 +262,19 @@
                 v.sword->set_position(bn::fixed(fx) - cam, fy - SPRITE_FEET - 80);
                 v.sword->set_horizontal_flip(sword_left);
 
-                if(!v.slash_fx)
+                if(blue_idx >= 0)
                 {
-                    v.slash_fx = bn::sprite_items::blue_slash.create_sprite(0, 0, blue_idx);
-                    v.slash_fx->set_bg_priority(0);
-                    v.slash_fx->set_z_order(-3);
+                    if(!v.slash_fx)
+                    {
+                        v.slash_fx = bn::sprite_items::blue_slash.create_sprite(0, 0, blue_idx);
+                        v.slash_fx->set_bg_priority(0);
+                        v.slash_fx->set_z_order(-3);
+                    }
+                    v.slash_fx->set_tiles(bn::sprite_items::blue_slash.tiles_item(), blue_idx);
+                    v.slash_fx->set_position(bn::fixed(fx) + (sword_left ? -8 : 8) - cam, fy - SPRITE_FEET - 80);
+                    v.slash_fx->set_horizontal_flip(sword_left);
                 }
-                v.slash_fx->set_tiles(bn::sprite_items::blue_slash.tiles_item(), blue_idx);
-                v.slash_fx->set_position(bn::fixed(fx) + (sword_left ? -8 : 8) - cam, fy - SPRITE_FEET - 80);
-                v.slash_fx->set_horizontal_flip(sword_left);
+                else { v.slash_fx.reset(); }
             }
             else { v.sword.reset(); v.sword_mat.reset(); v.slash_fx.reset(); }
 

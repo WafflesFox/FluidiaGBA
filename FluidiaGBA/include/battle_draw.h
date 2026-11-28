@@ -117,7 +117,7 @@
                     if(!_views[i] && cf.clone_of >= 0)
                     {
                         const FighterDef* cdef = (cf.clone_of == 100 && _waffle_def) ? _waffle_def : fighter_def(cf.clone_of);
-                        const int ctint = (cf.clone_of == 100) ? 3 : 2;
+                        const int ctint = cf.shadow_clone ? 3 : 4;
                         _views[i] = FighterView(*cdef, Fight::team_of(i) == 1, "", text, false, ctint, true);
                     }
                 }
@@ -264,13 +264,24 @@
             }
         }
         // fills the per-row start positions for the camera: the camera is the picture position that sits at the screen centre
+        // void update_floor_dx(bn::fixed cam)
+        // {
+        //     const int front = _stage->geom.ground_y;
+        //     const int cam_texels = cam.data() >> 4;               // 12 fractional bits -> the 8 the hardware uses
+        //     for(int row = front - FLOOR_ROWS; row < front; ++row)
+        //     {
+        //         detail::floor_dx_buf[row] = cam_texels - detail::floor_pa_buf[row] * 120;   // 120 = half the screen width
+        //     }
+        // }
+        static constexpr int FLOOR_MAP_SHIFT_X = 128 * 256;   // the wide texture has its middle 128 px further right (24.8 fixed point)
+
         void update_floor_dx(bn::fixed cam)
         {
             const int front = _stage->geom.ground_y;
-            const int cam_texels = cam.data() >> 4;               // 12 fractional bits -> the 8 the hardware uses
+            const int cam_texels = cam.data() >> 4;
             for(int row = front - FLOOR_ROWS; row < front; ++row)
             {
-                detail::floor_dx_buf[row] = cam_texels - detail::floor_pa_buf[row] * 120;   // 120 = half the screen width
+                detail::floor_dx_buf[row] = cam_texels - detail::floor_pa_buf[row] * 120 + FLOOR_MAP_SHIFT_X;
             }
         }
 

@@ -12,15 +12,21 @@ namespace
 {
     void game_screen(bn::sprite_text_generator& text)
     {
+        bn::fixed x = 7 * T;
+        bn::fixed y = 11 * T;
         int current_map = MAP_HOUSE;
+        int saved_map, saved_x, saved_y;
+        if(load_game(saved_map, saved_x, saved_y))
+        {
+            current_map = saved_map;
+            x = saved_x;
+            y = saved_y;
+        }
         bn::optional<bn::regular_bg_ptr> ground_bg = make_ground(current_map);
         bn::optional<bn::regular_bg_ptr> top_bg = make_top(current_map);
         ground_bg->set_priority(2);                       // ground: behind the player (backshot the tree)
         if(top_bg) { top_bg->set_priority(0); }           // roofs and canopies: in front of the player
 
-        // the player's position in WORLD pixels (the middle of the first world)
-        bn::fixed x = 7 * T;
-        bn::fixed y = 11 * T;
 
         bn::vector<bn::sprite_ptr, 32> text_sprites;
         bn::vector<bn::sprite_ptr, 32> pause_text_sprites;
@@ -54,6 +60,7 @@ namespace
         static battle::Battle battle_ui;
         bool debug_mode = false;
         bn::vector<bn::sprite_ptr, 8> debug_text_sprites;
+        DebugHud debug_hud;                   // RAM / stack / sprite counters, drawn while debug_mode is on
         net::LinkSession net_session;
         bn::sprite_ptr remote_waffle = bn::sprite_items::waffle.create_sprite(0, 0, first_frame(DOWN, false));
         bn::sprite_palette_ptr remote_pal = bn::sprite_palette_ptr::create_new(bn::sprite_items::waffle.palette_item());
@@ -449,6 +456,7 @@ namespace
                         park_npcs(npcs);
                         text_sprites.clear();
                         debug_text_sprites.clear();
+                        debug_hud.hide();
                         conn_text_sprites.clear();
                         conn_banner_timer = 0;
                         music.update();
@@ -551,6 +559,7 @@ namespace
                         park_npcs(npcs);                              // free the NPC sprites too: the battle needs their video memory
                         text_sprites.clear();
                         debug_text_sprites.clear();
+                        debug_hud.hide();
                         music.play(battle_music(current_map));
                         remote_waffle.set_visible(false);
                         conn_text_sprites.clear();
@@ -616,6 +625,7 @@ namespace
                         current_map = w.dest_map;
                         x = w.dest_x;
                         y = w.dest_y;
+                        save_game(current_map, x.integer(), y.integer());
 
                         ground_bg.reset();                            // free the old map first
                         top_bg.reset();
@@ -739,6 +749,7 @@ namespace
                 }
                 if(conn_banner_timer > 0 && --conn_banner_timer == 0) { conn_text_sprites.clear(); }
             }
+            debug_hud.update(text, debug_mode);
             music.update();
             bn::core::update();
         }

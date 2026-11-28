@@ -26,7 +26,7 @@ namespace
         { 600, 128, world_platforms, 2, 0, 0 },
         { { &bn::regular_bg_items::battle_backdrop_16, 50 }, { &bn::regular_bg_items::layer_4_forest, 100, true } }, 2,
         nullptr, nullptr,                                  // floor/platform art: default grass + wood
-        &bn::affine_bg_items::battle_top_grass,            // the 3D top
+        &bn::affine_bg_items::battle_top_grass, true,//the 3D ground, if its warping, and how long it is
     };
     constexpr battle::StageDef world2_stage =
     {
@@ -37,9 +37,9 @@ namespace
     constexpr battle::StageDef house_stage =
     {
         { 300, 128, house_platforms, 1, 0, 0 },
-        {{ &bn::regular_bg_items::house_bg, 50}}, 1,
+        {{ &bn::regular_bg_items::beta_house_bg, 50}}, 1,
         &bn::sprite_items::battle_floor_house, &bn::sprite_items::battle_platform_house,
-        &bn::affine_bg_items::battle_top_wood,
+        &bn::affine_bg_items::battle_top_wood_wide, false,
     };
     constexpr battle::StageDef world3_stage =
     {
